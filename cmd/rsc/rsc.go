@@ -32,14 +32,14 @@
   better do my own parsing. the examples below are off.]
 
  Example use:
-     rsenc -i 0,1,2 foo0.org foo1.org foo2.org -o 3,4,5 foo.rs3 foo.rs4 foo.rs5
+     rsc -i 0,1,2 foo0.org foo1.org foo2.org -o 3,4,5 foo.rs3 foo.rs4 foo.rs5
 
  This produces foo.rs[3..5] from the originals foo[0..2].
 
  Now as long as you have any 3 of the total set of 6, you can
  reconstruct the other three. e.g.:
 
-     rsenc -i 0,3,5 foo0.org foo.rs3 foo.rs5  -o 1 foo1.org
+     rsc -i 0,3,5 foo0.org foo.rs3 foo.rs5  -o 1 foo1.org
 
  Note that the output may be longer than the original foo1.org,
  because of padding, so you may have to keep track of the original lengths
@@ -51,9 +51,9 @@
  You can also use any 3 to construct a new one that can be used to
  decode instead of any other, e.g.:
 
-     rsenc -i 0,3,5 foo0.org foo.rs3 foo.rs5  -o 7 foo.rs7
+     rsc -i 0,3,5 foo0.org foo.rs3 foo.rs5  -o 7 foo.rs7
 
-     rsenc -i 0,3,7 foo0.org foo.rs3 foo.rs7  -o 2 foo2.org
+     rsc -i 0,3,7 foo0.org foo.rs3 foo.rs7  -o 2 foo2.org
 
 */
 package main
@@ -69,7 +69,7 @@ import (
 )
 
 //var kUsage = "Usage: %s -i 0,1... infile0 infile1... -o 3,4... ofile3 ofile4..."
-var kUsage = "Usage: %s -i 0,1... -o 3,4...  infile0 infile1... ofile3 ofile4...\n"
+const kUsage = "Usage: %s -i 0,1... -o 3,4...  infile0 infile1... ofile3 ofile4...\n"
 
 func usage(msg ...interface{}) {
 	if len(msg) > 0 {
