@@ -361,30 +361,25 @@ func (s Set63) Intersection(t Set63) Set63 {
 
 // Intersects returns whether s and t have any element in common.
 func (s Set63) Intersects(t Set63) bool {
-	_, s, sb, se := s.headx()
-	_, t, tb, te := t.headx()
-
-	for sb != se && tb != te {
-		// 6 possibilities:
-		// - s comes entirely before t
-		if se <= tb {
-			_, s, sb, se = s.headx()
-			continue
+	for len(s) > 0 && len(t) > 0 {
+		for len(s) <= len(t) {
+			i := t.search(0, len(t), s[0])
+			if t[i].contains(s[0]) || s[0].contains(t[i]) {
+				return true
+			}
+			t, s = t[i:], s[1:]
 		}
-
-		// - t comes entirely before s
-		if te <= sb {
-			_, t, tb, te = t.headx()
-			continue
+		if len(s) == 0 {
+			break
 		}
-		// the other 4 are all intersections:
-		// - s is entirely contained in t
-		// - t is entirely contained in s
-		// - [sb ...[tb .. se)...te),
-		// - [tb ...[sb .. te)...se),
-		return true
+		for len(t) <= len(s) {
+			i := s.search(0, len(s), t[0])
+			if t[0].contains(s[i]) || s[i].contains(t[0]) {
+				return true
+			}
+			t, s = t[1:], s[i:]
+		}
 	}
-
 	return false
 }
 
