@@ -99,63 +99,47 @@ func (t *Trie) Get(key string) interface{} {
 		return t.value
 	}
 
-	if key[s] < t.base || int(key[s]) > int(t.base) + len(t.children) {
+	if key[s] < t.base || int(key[s]) > int(t.base)+len(t.children) {
 		return nil
 	}
 
 	return t.children[key[s]-t.base].Get(key[s+1:])
 }
 
-type KeyValue struct {
-	Key   string
-	Value interface{}
-}
-
-func (kv KeyValue) String() string { return fmt.Sprintf("%s:%v", kv.Key, kv.Value) }
-
-func (t *Trie) all(ch chan<- KeyValue, buf *bytes.Buffer) {
+func (t *Trie) forEach(f func(string, interface{}) bool, buf *bytes.Buffer) bool {
 	if t.value != nil || t.children != nil {
+
 		pfx := buf.Len()
 		buf.WriteString(t.suffix)
 
-		if t.value != nil {
-			ch <- KeyValue{buf.String(), t.value}
+		if t.value != nil && !f(buf.String(), t.value) {
+			return false
 		}
 
 		if t.children != nil {
 			l := buf.Len()
 			buf.WriteByte(t.base)
 			for _, child := range t.children {
-				child.all(ch, buf)
+				if !child.forEach(f, buf) {
+					return false
+				}
 				buf.Bytes()[l]++
 			}
 		}
 
 		buf.Truncate(pfx)
+
 	}
 
-	if buf.Len() == 0 {
-		close(ch)
-	}
+	return true
 }
 
-// All returns a channel of KeyValues on which all elements of the trie will
-// be sent in sorted order.  The channel will be closed after the last element.
-//
-// Example use:
-//     for kv := range t.All() {
-//               //.... use k.Key (string)
-//               if vv, ok := kv.Value.(yourtype); ok {
-//                      //.... use value (yourtype)
-//               }
-//     }
-// Note: the current Go runtime implementation will not garbage collect the goroutine
-// launched here when the channel is not read until its closing.
-func (t *Trie) All() <-chan KeyValue {
-	ch := make(chan KeyValue)
+// ForEach will apply the function f to each key, value pair in the
+// Trie in sorted (depth-first pre-)order.  if f returns false, the
+// iteration will stop.
+func (t *Trie) ForEach(f func(string, interface{}) bool) {
 	var buf bytes.Buffer
-	go t.all(ch, &buf)
-	return ch
+	t.forEach(f, &buf)
 }
 
 // String returns a multiline string representation of the trie
@@ -168,9 +152,10 @@ func (t *Trie) All() <-chan KeyValue {
 func (t *Trie) String() string {
 	var buf bytes.Buffer
 	buf.WriteString("trie{\n")
-	for kv := range t.All() {
-		fmt.Fprintf(&buf, "\t%s:%v\n", kv.Key, kv.Value)
-	}
+	t.ForEach(func(key string, val interface{}) bool {
+		fmt.Fprintf(&buf, "\t%s:%v\n", key, val)
+		return true
+	})
 	buf.WriteString("}")
 	return buf.String()
 }

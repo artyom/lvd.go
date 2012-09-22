@@ -74,11 +74,10 @@ func TestThatItWorks(t *testing.T) {
 		}
 	}
 
-	// All reproduces them all in sorted order
+	// ForEach reproduces them all in sorted order
 	prev := ""
-	for kv := range tr.All() {
-		s := kv.Key
-		if v, ok := kv.Value.(string); !ok || v != s {
+	tr.ForEach(func(s string, val interface{}) bool {
+		if v, ok := val.(string); !ok || v != s {
 			if ok {
 				t.Error("tr[", s, "] == ", v, ", expecting ", s)
 			} else {
@@ -87,18 +86,19 @@ func TestThatItWorks(t *testing.T) {
 		}
 
 		if _, ok := m[s]; !ok {
-			t.Error("tr[", s, "] == ", kv.Value, ", but should not exist")
+			t.Error("tr[", s, "] == ", val, ", but should not exist")
 		}
 
-		if prev >= kv.Key {
-			t.Errorf("out of order element: %+v after %+v", kv.Key, prev)
+		if prev >= s {
+			t.Errorf("out of order element: %+v after %+v", s, prev)
 		}
-		prev = kv.Key
+		prev = s
 
-		delete(m, kv.Key)
-	}
+		delete(m, s)
+		return true
+	})
 
-	// All exhausts
+	// ForEach exhausts
 	if len(m) > 0 {
 		t.Error("Unretrieved: ", m)
 	}
@@ -112,7 +112,8 @@ var tc []string
 
 func init() {
 	var b bytes.Buffer
-	for i := 0; i < 10000; i++ {
+	m := make(map[string]bool)
+	for len(m) < 10000 {
 		b.Reset()
 		for l := rand.Intn(4) + 1; l > 0; l-- {
 			ch := byte(65 + rand.Intn(alphabet))
@@ -120,17 +121,17 @@ func init() {
 				b.WriteByte(ch)
 			}
 		}
-		tc = append(tc, b.String())
+		m[b.String()] = true
+	}
+	for s := range m {
+		tc = append(tc, s)
 	}
 }
 
 // just insertion, no retrieval
 func nativeMap(size int) {
 	m := make(map[string]string, len(tc))
-	for i, s := range tc {
-		if i > size {
-			break
-		}
+	for _, s := range tc[:size] {
 		m[s] = s
 	}
 }
@@ -138,10 +139,7 @@ func nativeMap(size int) {
 // insertion and get all in sorted order
 func nativeMapAndSort(size int) {
 	m := make(map[string]string, len(tc))
-	for i, s := range tc {
-		if i > size {
-			break
-		}
+	for _, s := range tc[:size] {
 		m[s] = s
 	}
 	sl := make([]string, len(m))
@@ -154,10 +152,7 @@ func nativeMapAndSort(size int) {
 // just insertion, no retrieval
 func withTrie(size int) {
 	var tr Trie
-	for i, s := range tc {
-		if i > size {
-			break
-		}
+	for _, s := range tc[:size] {
 		tr.Put(s, s)
 	}
 }
@@ -171,8 +166,8 @@ func withTrieAndAll(size int) {
 		}
 		tr.Put(s, s)
 	}
-	for _ = range tr.All() {
-	}
+
+	tr.ForEach(func(key string, val interface{}) bool { return true })
 }
 
 func BenchmarkNativeMap10(b *testing.B) {
@@ -258,3 +253,34 @@ func BenchmarkWithTrieAndAll10000(b *testing.B) {
 		withTrieAndAll(10000)
 	}
 }
+
+func forEach(size int, b *testing.B) {
+	b.StopTimer()
+	var tr Trie
+	for _, s := range tc[:size] {
+		tr.Put(s, s)
+	}
+	b.StartTimer()
+
+	for i := 0; i < b.N; i++ {
+		i := 0
+		tr.ForEach(func(key string, val interface{}) bool {
+			i++
+			if key != val.(string) {
+				b.Error(key, " != ", val.(string))
+				return false
+			}
+			return true
+		})
+
+		if i != size {
+			b.Error("aah", i)
+		}
+	}
+}
+
+func BenchmarkForEach1(b *testing.B)     { forEach(1, b) }
+func BenchmarkForEach10(b *testing.B)    { forEach(10, b) }
+func BenchmarkForEach100(b *testing.B)   { forEach(100, b) }
+func BenchmarkForEach1000(b *testing.B)  { forEach(1000, b) }
+func BenchmarkForEach10000(b *testing.B) { forEach(10000, b) }
