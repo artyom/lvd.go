@@ -127,13 +127,15 @@ func TestSetEmpty(t *testing.T) {
 		t.Error("Emtpy set count", v, s)
 	}
 
-	for e := range s.Elements() {
+	s.ForEach(func(e int64) bool { 
 		t.Error("Emtpy set has element", e)
-	}
+		return true
+	})
 
-	for e := range s.Intervals() {
-		t.Error("Emtpy set has interval", e)
-	}
+	s.ForEachInterval(func(b, e int64) bool {
+		t.Error("Emtpy set has interval", b, e)
+		return true
+	})
 	if !s.Union(s).IsEmpty() {
 		t.Error("Emtpy set ∩ itself not empty", s)
 	}
@@ -191,14 +193,23 @@ func TestSet1(t *testing.T) {
 		}
 	}
 
-	for e := range s.Elements() {
+	s.ForEach(func(e int64) bool {
 		if e != v[0] {
 			t.Error("Set has wrong element", e)
+			return false
 		}
 		v = v[1:]
-	}
+		return true
+	})
 
-	ch := s.Intervals()
+	ch := make(chan struct { Begin, End int64 })
+	go func() {
+		s.ForEachInterval(func(b, e int64) bool {
+			ch <- struct{Begin,End int64}{b, e}
+			return true
+		})
+		close (ch)
+	}()
 	e, ok := <-ch
 	if !ok {
 		t.Error("set ", []cell63(s), " has no interval")
@@ -235,11 +246,12 @@ func TestInterval(t *testing.T) {
 				t.Error(s, " has wrong element", i)
 			}
 		}
-		for i := range s.Intervals() {
-			if i.Begin != min || i.End != max {
-				t.Error("set ", s, " has wrong interval", i)
+		s.ForEachInterval(func(b, e int64) bool {
+			if b != min || e != max {
+				t.Error("set ", s, " has wrong interval", b, e)
 			}
-		}
+			return true
+		})
 	}
 }
 
@@ -308,9 +320,10 @@ func TestUnionRandom(t *testing.T) {
 		if un := u.unnormalized(); len(un) > 0 {
 			t.Fatal(u, "unnormalized: ", un)
 		}
-		for e := range u.Elements() {
+		u.ForEach(func(e int64) bool {
 			xu ^= (1 << (uint64(e)))
-		}
+			return true
+		})
 		if xu != 0 {
 			t.Fatal(x1, x2, ": ", s1, "   ∪   ", s2, " == ", u, " expecting: ", su)
 		}
@@ -370,9 +383,10 @@ func TestIntersectionRandom(t *testing.T) {
 		if !s1.Intersects(s2) && !su.IsEmpty() {
 			t.Error(s1, " ∩  ", s2, "  == ∅ but ", su, "is not empty")
 		}
-		for e := range u.Elements() {
+		u.ForEach(func(e int64) bool {
 			xu ^= (1 << (uint64(e)))
-		}
+			return true
+		})
 		if xu != 0 {
 			t.Fatal(x1, x2, ": ", s1, "   ∩   ", s2, " == ", u, " expecting: ", su)
 		}
@@ -405,12 +419,13 @@ func TestComplementRandom(t *testing.T) {
 		if v := uint64(u.Count()) + uint64(s1.Count()); v != 1<<63 {
 			t.Error("Don't add up: ", u.Count(), s1.Count(), 1<<63-v)
 		}
-		for e := range u.Elements() {
+		u.ForEach(func(e int64) bool {
 			if e > 63 {
 				t.Fatal("element larger than 63:", e)
 			}
 			xu ^= (1 << (uint64(e)))
-		}
+			return true
+		})
 		if xu != 0 {
 			t.Fatal(x1, ": ", s1, " complement == ", u, " expecting: ", su)
 		}

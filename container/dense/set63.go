@@ -488,66 +488,26 @@ func (s Set63) Span() (begin, end int64) {
 	return int64(s[0].begin()), int64(s[len(s)-1].end() - 1)
 }
 
-// Elements returns a channel on which all elements of s will be emitted. E.g.:
-//       for elem := range s.Elements() {
-//             .... // use elem
-//       }
-// Note: the current Go runtime implementation will not garbage collect the goroutine
-// launched here when the channel is not read until its closing.
-func (s Set63) Elements() <-chan int64 {
-	ch := make(chan int64)
-	if len(s) > 0 {
-		go func() {
-			for _, v := range s {
-				for i := v.begin(); i < v.end(); i++ {
-					ch <- int64(i)
-				}
+// ForEach calls the function f with each element of s until f returns false.
+func (s Set63) ForEach(f func(int64) bool) {
+	for _, v := range s {
+		for i := v.begin(); i < v.end(); i++ {
+			if !f(int64(i)) {
+				return
 			}
-			close(ch)
-		}()
-	} else {
-		close(ch)
+		}
 	}
-	return ch
 }
 
-// An Interval63 represents a contiguous closed interval of non-negative int64s.
-type Interval63 struct{ Begin, End int64 }
-
-// Interval returns a channel over which the contiguous intervals
-// that make up s will be sent. E.g.:
-//
-//       for i := range s.Intervals() {
-//                ... // use i.Begin and i.End
-//                for e := i.Begin; e <= i.End; e++ {
-//                    ...
-//                }
-//       }
-// Note: the current Go runtime implementation will not garbage collect the goroutine
-// launched here when the channel is not read until its closing.
-func (s Set63) Intervals() <-chan Interval63 {
-	ch := make(chan Interval63)
-	if len(s) > 0 {
-		go func() {
-			_, s, sb, se := s.headx()
-			for sb != se {
-				ch <- Interval63{int64(sb), int64(se - 1)}
-				_, s, sb, se = s.headx()
-			}
-			close(ch)
-		}()
-	} else {
-		close(ch)
+// ForEachInterval calls the function f with each contiguous closed interval [b, e]  s until f returns false.
+func (s Set63) ForEachInterval(f func(b, e int64) bool) {
+	_, s, sb, se := s.headx()
+	for sb != se {
+		if !f(int64(sb), int64(se - 1)) {
+			return
+		}
+		_, s, sb, se = s.headx()
 	}
-	return ch
-}
-
-// String returns "∅" for the empty interval or "[begin, end)" for non empty ones.
-func (i Interval63) String() string {
-	if i.Begin == i.End {
-		return "∅"
-	}
-	return fmt.Sprintf("[%d, %d]", i.Begin, i.End)
 }
 
 // String returns "[begin, end)" for cells.  Useful in debugging, e.g. fmt.Println([]cell63(s)).
