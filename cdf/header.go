@@ -1,0 +1,688 @@
+// Copyright 2012 Luuk van Dijk. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cdf
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+)
+
+// A version of 1 indicates 32 bit offsets, a version of 2 indicates 64 bit offsets.
+// All other versions, in particular V4 (which uses HDF as a backing store), are unsupported.
+type version byte
+
+const (
+	_V1 version = iota + 1 // 32 bit offsets
+	_V2                    // 64 bit offsets
+)
+
+// String renders v as "V1" or "V2" if valid, "<42>" if invalid.
+func (v version) String() string {
+	switch v {
+	case _V1:
+		return "V1"
+	case _V2:
+		return "V2"
+	}
+	return fmt.Sprintf("<%d>", byte(v))
+}
+
+// A datatype encodes the NetCDF data type of a variable or attribute.
+type datatype int32
+
+const (
+	_BYTE datatype = iota + 1
+	_CHAR
+	_SHORT
+	_INT
+	_FLOAT
+	_DOUBLE
+)
+
+// data type string and storage size tables.
+var (
+	dt2String      = [...]string{"", "BYTE", "CHAR", "SHORT", "INT", "FLOAT", "DOUBLE"}
+	dt2StorageSize = [...]int{0, 1, 1, 2, 4, 4, 8}
+)
+
+// Valid returns whether d is one of the six defined types.
+func (d datatype) valid() bool { return d >= _BYTE && d <= _DOUBLE }
+
+// StorageSize returns the number of bytes occupied by an element of the datatype.
+func (d datatype) storageSize() int {
+	if d.valid() {
+		return dt2StorageSize[d]
+	}
+	return 0
+}
+
+// Zero returns a slice of the proper type of length n,
+// except for _CHAR, for which it returns the empty string.
+func (d datatype) Zero(n int) interface{} {
+	switch d {
+	case _BYTE:
+		return make([]int8, n)
+	case _CHAR:
+		return ""
+	case _SHORT:
+		return make([]int16, n)
+	case _INT:
+		return make([]int32, n)
+	case _FLOAT:
+		return make([]float32, n)
+	case _DOUBLE:
+		return make([]float64, n)
+	}
+	return nil
+}
+
+// DataTypeFromValues maps the type of val to its corresponding datatype.
+// The only valid dynamic types of val are 
+// []int8, string, []int16, []int32, []float32 or []float64.
+// Any other type of val returns the zero (invalid) datatype).
+func dataTypeFromValues(val interface{}) datatype {
+	switch val.(type) {
+	case []int8:
+		return _BYTE
+	case string:
+		return _CHAR
+	case []int16:
+		return _SHORT
+	case []int32:
+		return _INT
+	case []float32:
+		return _FLOAT
+	case []float64:
+		return _DOUBLE
+	}
+	return 0
+}
+
+// String renders the datatype as "BYTE", "CHAR", "SHORT", "INT", "FLOAT", "DOUBLE" or "<42>"
+// if the type is invalid.
+func (d datatype) String() string {
+	if d.valid() {
+		return dt2String[d]
+	}
+	return fmt.Sprintf("<%d>", int32(d))
+}
+
+// round x up to the nearest multiple of 4.
+func pad4(x int64) int64 { return (x + 3) &^ 3 }
+
+// A NetCDF dimension as represented in the header
+type dimension struct {
+	name   string
+	length int32
+}
+
+// An NetCDF global or variable attribute as represented in the header
+type attribute struct {
+	name   string
+	dtype  datatype
+	values interface{} // []int8, string, []int16, []int32, []float32 or []float64
+}
+
+// Fprint writes a debug representation of the attribute in the form "[var]:name type = val"
+// to w.  Long strings are truncated and suffixed with "...".
+func (a *attribute) Fprint(w io.Writer, pfx string) {
+	fmt.Fprintf(w, "%s:%s %s = ", pfx, a.name, a.dtype)
+	switch a.dtype {
+	case _CHAR:
+		s := a.values.(string)
+		if len(s) > 40 {
+			s = s[:40] + "..."
+		}
+		fmt.Fprintf(w, "%#v", s)
+	default:
+		fmt.Fprintf(w, "%#v", a.values)
+	}
+}
+
+// An NetCDF variable as represented in the header
+type variable struct {
+	name  string
+	dim   []int32 // indices into header.dim
+	att   []attribute
+	dtype datatype
+	vsize int32 // set as per spec but not used by this library
+	begin int64
+}
+
+// A CDF file contains a header and a data section.
+// The header defines the contents and layout of the data section.
+// The header layout is specified by
+// 	http://www.unidata.ucar.edu/software/netcdf/docs/classic_format_spec.html
+type header struct {
+	version version
+	numrecs int32
+	dim     []dimension
+	att     []attribute
+	vars    []variable
+}
+
+// Find the index of the dimension named v, or return -1.
+// Linear scan but unlikely to matter. 
+func (h *header) dimByName(v string) int {
+	for i := range h.dim {
+		if h.dim[i].name == v {
+			return i
+		}
+	}
+	return -1
+}
+
+// Find the the variable named v, or return nil.
+// The returned pointer may be invalidated by a call to header.AddVariable.
+// Linear scan but unlikely to matter. 
+func (h *header) varByName(v string) *variable {
+	for i := range h.vars {
+		if h.vars[i].name == v {
+			return &h.vars[i]
+		}
+	}
+	return nil
+}
+
+// Find the attribute named a in the variable named v
+// or in the global variables if v == "". returns nil
+// if there is no such attibute.
+// Linear scan but unlikely to matter. 
+func (h *header) attrByName(v, a string) *attribute {
+	attr := &h.att
+	if v != "" {
+		vv := h.varByName(v)
+		if vv == nil {
+			return nil
+		}
+		attr = &vv.att
+	}
+	for i := range *attr {
+		if (*attr)[i].name == a {
+			return &(*attr)[i]
+		}
+	}
+	return nil
+}
+
+// Dimensions returns a slice with the names of the dimensions for variable v,
+// all dimensions if v == "", or nil if v is not a valid variable.
+// Only call on headers for which check returns nil.
+func (h *header) Dimensions(v string) []string {
+	if v == "" {
+		r := make([]string, len(h.dim))
+		for i := range h.dim {
+			r[i] = h.dim[i].name
+		}
+		return r
+	}
+
+	vv := h.varByName(v)
+	if vv == nil {
+		return nil
+	}
+	r := make([]string, len(vv.dim))
+	for j, d := range vv.dim {
+		r[j] = h.dim[d].name
+	}
+	return r
+}
+
+// Lengths returns a slice with the lenghts of the dimensions for variable v,
+// all dimensions if v == "", or nil if v is not a valid variable.
+// Only call on headers for which check returns nil.
+func (h *header) Lengths(v string) []int {
+	if v == "" {
+		r := make([]int, len(h.dim))
+		for i := range h.dim {
+			r[i] = int(h.dim[i].length)
+		}
+		return r
+	}
+
+	vv := h.varByName(v)
+	if vv == nil {
+		return nil
+	}
+	return h.lengths(vv)
+}
+
+// lengths returns a slice with the lenghts of the dimensions for variable v, which should be
+// a member of h.
+func (h *header) lengths(v *variable) []int {
+	r := make([]int, len(v.dim))
+	for j, d := range v.dim {
+		r[j] = int(h.dim[d].length)
+	}
+	return r
+}
+
+// ZeroValue returns a zeroed slice of the type of the variable v of length n.
+// If the named variable does not exist in h, Zero returns nil.
+// For type CHAR, Zero returns an empty string.
+func (h *header) ZeroValue(v string, n int) interface{} {
+	vv := h.varByName(v)
+	if vv == nil {
+		return nil
+	}
+	return vv.dtype.Zero(n)
+}
+
+// IsRecordVariable returns true iff a variable named v exists and its outermost dimension
+// is the header's (unique) record dimension.
+func (h *header) IsRecordVariable(v string) bool {
+	return h.isRecordVariable(h.varByName(v))
+}
+
+func (h *header) isRecordVariable(vv *variable) bool {
+	if vv == nil || len(vv.dim) == 0 {
+		return false
+	}
+	return h.dim[vv.dim[0]].length == 0
+}
+
+// Variables returns a slice with the names of all variables defined in the header.
+func (h *header) Variables() []string {
+	r := make([]string, len(h.vars))
+	for i := range h.vars {
+		r[i] = h.vars[i].name
+	}
+	return r
+}
+
+// Variables returns a slice with the names of all attributes defined in the header,
+// for variable v.  If v is the empty string, returns all global attributes.
+func (h *header) Attributes(v string) []string {
+	attr := &h.att
+	if v != "" {
+		vv := h.varByName(v)
+		if vv == nil {
+			return nil
+		}
+		attr = &vv.att
+	}
+	r := make([]string, len(*attr))
+	for i := range *attr {
+		r[i] = (*attr)[i].name
+	}
+	return r
+}
+
+// GetAttribute returns the value of the attribute a of variable
+// v or the global attribute a if v == "".  The returned
+// value is of type  []int8, string, []int16, []int32,
+// []float32 or []float64 and should not be modified by the caller,
+// as it is shared by all callers.
+func (h *header) GetAttribute(v, a string) interface{} {
+	attr := h.attrByName(v, a)
+	if attr == nil {
+		return nil
+	}
+	return attr.values
+}
+
+// Newheader constructs a new CDF header of the specified version.
+// dims and sizes specify the names and lengths of the dimensions.
+// Invalid dimension or size specifications, repeated dimension names,
+// as well as the occurence of more than 1 record dimension (size == 0) lead to panics.
+func newHeader(v version, dims []string, sizes []int) *header {
+
+	if len(dims) != len(sizes) {
+		panic("dims and sizes should be of same length")
+	}
+
+	recdim := -1
+	for i, s := range dims {
+		if sizes[i] < 0 {
+			panic("invalid dimension lenght")
+		}
+		if sizes[i] == 0 {
+			if recdim == -1 {
+				recdim = i
+			} else {
+				panic("multiple record dimensions")
+			}
+		}
+		for j, t := range dims {
+			if i != j && s == t {
+				panic("duplicate dimension name: " + s)
+			}
+		}
+	}
+
+	h := &header{version: v, dim: make([]dimension, len(dims))}
+	for i, v := range dims {
+		h.dim[i] = dimension{name: v, length: int32(sizes[i])}
+	}
+
+	return h
+}
+
+// AddVariable adds a variable of given type with the named dimensions to the header.
+// Use of an existing variable name, or a nonexistent dimension name leads to a panic,
+// as does use of the record dimension for any other than the first.
+// The datatype is determined from the dynamic type of val, which may be
+// one of []int8, string, []int16, []int32, []float32 or []float64.  Any
+// other type will lead to a panic.  The contents of val are ignored.
+func (h *header) addVariable(v string, dims []string, val interface{}) {
+	if h.varByName(v) != nil {
+		panic("repeated add of variable " + v)
+	}
+
+	d := dataTypeFromValues(val)
+	if !d.valid() {
+		panic("invalid attribute value type")
+	}
+
+	vsize := int64(d.storageSize())
+
+	dim := make([]int32, len(dims))
+	for i, dd := range dims {
+		d := h.dimByName(dd)
+		if d < 0 {
+			panic("invalid dimension")
+		}
+		if h.dim[d].length == 0 {
+			if i != 0 {
+				panic("record dimension not outermost")
+			}
+		} else {
+			vsize *= int64(h.dim[d].length)
+		}
+		dim[i] = int32(d)
+	}
+
+	vsize = pad4(vsize)
+	// the spec is ambiguous, it says s > 1<<32-4...
+	// but the grammar says NON_NEG is a positive INT
+	// and INT is a signed 32 bit big endian, so we'll set it it 0xffff/-1 if 
+	if vsize > (1<<31 - 4) {
+		vsize = -1
+	}
+
+	h.vars = append(h.vars, variable{name: v, dim: dim, dtype: d, vsize: int32(vsize)})
+}
+
+// AddAttribute adds an attribute named a to a variable named v, or to the global attributes
+// if v is the empty string.  Use of a nonexistent variable name or an existent attribute name leads to a panic.
+// The value can be of type []int8, string, []int16, []int32, []float32 or []float64, and will be stored
+// as NetCDF type  BYTE, CHAR, SHORT, INT, FLOAT, DOUBLE resp.
+func (h *header) addAttribute(v, a string, val interface{}) {
+	att := &h.att
+	if v != "" {
+		vv := h.varByName(v)
+		if vv == nil {
+			panic("no such variable")
+		}
+		att = &vv.att
+	}
+	for _, aa := range *att {
+		if aa.name == a {
+			panic("repeated add of attribute " + v + ":" + a)
+		}
+	}
+	d := dataTypeFromValues(val)
+	if !d.valid() {
+		panic("invalid attribute value type")
+	}
+	*att = append(*att, attribute{name: a, dtype: d, values: val})
+}
+
+// String returns a summary dump of the header, suitable for debugging.
+func (h *header) String() string {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "version:%v\ndimensions:\n", h.version)
+	for i := range h.dim {
+		if h.dim[i].length == 0 { // the record dimension
+			fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (%d currently)\n", h.dim[i].name, h.numrecs)
+		} else {
+			fmt.Fprintf(&b, "\t%s = %d ;\n", h.dim[i].name, h.dim[i].length)
+		}
+	}
+
+	fmt.Fprintf(&b, "variables:\n")
+	for i := range h.vars {
+		fmt.Fprintf(&b, "\t%s %s[", h.vars[i].name, h.vars[i].dtype)
+		for j, d := range h.vars[i].dim {
+			if j > 0 {
+				fmt.Fprintf(&b, ", ")
+			}
+			if d < 0 || int(d) >= len(h.dim) {
+				fmt.Fprintf(&b, "<invalid %d>", d)
+				continue
+			}
+			fmt.Fprintf(&b, "%s", h.dim[d].name)
+			if h.dim[d].length == 0 {
+				fmt.Fprintf(&b, "*")
+			}
+		}
+		fmt.Fprintf(&b, "] vsize:%d begin:%d\n", h.vars[i].vsize, h.vars[i].begin)
+		for j := range h.vars[i].att {
+			fmt.Fprintf(&b, "\t\t")
+			h.vars[i].att[j].Fprint(&b, h.vars[i].name)
+			fmt.Fprintf(&b, "\n")
+		}
+	}
+
+	// global attributes
+	for j := range h.att {
+		fmt.Fprintf(&b, "\t")
+		h.att[j].Fprint(&b, "")
+		fmt.Fprintf(&b, "\n")
+	}
+
+	return b.String()
+}
+
+// Check verifies the integrity of the header.
+// - at most one record dimension
+// - no duplicate dimension names
+// - no duplicate attribute names
+// - no duplicate variable names
+// - variable dimensions valid
+// - only the first dimension can be the record dimension
+// - offsets of non-variable records increasing, large enough and all before variable records
+// - offset of variable records also increasing, large enough
+func (h *header) Check() (errs []error) {
+	var x []string
+	for i := range h.dim {
+		if h.dim[i].length == 0 {
+			x = append(x, h.dim[i].name)
+		}
+	}
+	if len(x) > 1 {
+		errs = append(errs, fmt.Errorf("multiple record dimensions: %v", x))
+	}
+
+	for i := range h.dim {
+		for j := range h.dim {
+			if i != j && h.dim[i].name == h.dim[j].name {
+				errs = append(errs, fmt.Errorf("repeated dimension: %v", h.dim[i].name))
+			}
+		}
+	}
+
+	for i := range h.vars {
+		for j := range h.vars {
+			if i != j && h.vars[i].name == h.vars[j].name {
+				errs = append(errs, fmt.Errorf("repeated variable: %s", h.vars[i].name))
+			}
+		}
+	}
+
+	for i := range h.att {
+		for j := range h.att {
+			if i != j && h.att[i].name == h.att[j].name {
+				errs = append(errs, fmt.Errorf("repeated attribute :%s", h.att[i].name))
+			}
+		}
+	}
+
+	for v := range h.vars {
+		for i := range h.vars[v].att {
+			for j := range h.vars[v].att {
+				if i != j && h.vars[v].att[i].name == h.vars[v].att[j].name {
+					errs = append(errs, fmt.Errorf("repeated attribute %s:%s", h.vars[v].name, h.vars[v].att[i].name))
+				}
+			}
+		}
+	}
+
+	d := int32(len(h.dim))
+	for v := range h.vars {
+		for i, x := range h.vars[v].dim {
+			if x < 0 || x > d {
+				errs = append(errs, fmt.Errorf("invalid dimension %s[%d] = %d", h.vars[v].name, i, x))
+			}
+			if h.dim[x].length == 0 && i != 0 {
+				errs = append(errs, fmt.Errorf("non-outer record dimension %s[%d]", h.vars[v].name, i))
+			}
+		}
+	}
+
+	// check offsets increase in the right order and fit vsizes
+	strides := h.strides()
+	offs := pad4(h.size())
+
+	for i := range h.vars {
+		if !h.isRecordVariable(&h.vars[i]) {
+			if h.vars[i].begin&3 != 0 || h.vars[i].begin < offs {
+				errs = append(errs, fmt.Errorf("variable %s offset %d invalid", h.vars[i].name, h.vars[i].begin))
+			}
+			offs = h.vars[i].begin
+			offs += pad4(strides[i][0])
+		}
+	}
+
+	for i := range h.vars {
+		if h.isRecordVariable(&h.vars[i]) {
+			if h.vars[i].begin&3 != 0 || h.vars[i].begin < offs {
+				errs = append(errs, fmt.Errorf("variable %s offset %d invalid", h.vars[i].name, h.vars[i].begin))
+			}
+			offs = h.vars[i].begin
+			offs += pad4(strides[i][0])
+		}
+	}
+
+	return
+}
+
+// TODO
+// calculate numrecs from header and filesize
+
+// strides computes the stride array
+// eg for a non-record variable of rank 3, nz * ny * nx:
+// strides = []int64{ nz*ny*nx*dzs, ny*nx*dsz ,nx*dsz ,dsz }
+// for a record variable, nz == 0 if computed like this, and the [1] entry
+// should be the slabsize, not ny*nx*dsz.  If there is only 1 record variable
+// it will not be padded.  because the first entry is not used in index->offset
+// calculations we will store the (real, not fictional) vsize there.
+func (h *header) strides() [][]int64 {
+	strides := make([][]int64, len(h.vars))
+
+	recvars := 0
+	var slabsize int64
+
+	for i := range h.vars {
+		d := len(h.vars[i].dim)
+		strides[i] = make([]int64, d+1)
+		strides[i][d] = int64(h.vars[i].dtype.storageSize())
+
+		for j := d - 1; j >= 0; j-- {
+			strides[i][j] = strides[i][j+1] * int64(h.dim[h.vars[i].dim[j]].length)
+		}
+
+		if strides[i][0] == 0 {
+			recvars++
+			slabsize = strides[i][1]
+		}
+	}
+
+	// if there was just 1 recvar, slabsize has been set above, and does not require padding
+	// otherwise recompute based on all of the vsizes of the record variables
+	if recvars > 1 {
+		slabsize = 0
+		for i := range strides {
+			if strides[i][0] == 0 { // is record variable
+				slabsize += (strides[i][1] + 3) &^ 3
+			}
+		}
+	}
+
+	for i := range strides {
+		if strides[i][0] == 0 {
+			// save the vsize in the [0] entry which is not used for indexing anyway
+			strides[i][0] = strides[i][1]
+			strides[i][1] = slabsize
+		}
+	}
+
+	return strides
+}
+
+// DataStart returns the offset of the first variable.
+func (h *header) dataStart() int64 {
+	ds := (h.size() + 3) &^ 3
+
+	if len(h.vars) == 0 || h.vars[0].begin == 0 {
+		// not set, undefined file
+		return ds
+	}
+
+	ds = h.vars[0].begin
+
+	for i := range h.vars {
+		if !h.isRecordVariable(&h.vars[i]) {
+			ds = h.vars[i].begin
+			break
+		}
+	}
+
+	return ds
+}
+
+// Set the vars[*].begin fields starting at max(start, h.size)
+// returns the values of the first and last offset.
+// if there are no variables, last will be zero
+func (h *header) setOffsets(start int64) (first, last int64) {
+	offs := h.size()
+
+	if start > offs {
+		offs = start
+	}
+
+	offs = pad4(offs)
+	first = offs
+	strides := h.strides()
+
+	for i := range h.vars {
+		if !h.isRecordVariable(&h.vars[i]) {
+			h.vars[i].begin = offs
+			last = offs
+			offs += pad4(strides[i][0])
+		}
+	}
+
+	for i := range h.vars {
+		if h.isRecordVariable(&h.vars[i]) {
+			h.vars[i].begin = offs
+			last = offs
+			offs += pad4(strides[i][0])
+		}
+	}
+
+	return
+}
