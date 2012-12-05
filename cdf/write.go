@@ -147,7 +147,7 @@ func (v *variable) writeTo(w io.Writer, offs64 bool) error {
 // writeHeader encodes the CDF header to the io.Writer at the current position.
 // If an error occurs that prevents further writing, the writer is left at the
 // erroring position and err is set to the error from the underlying call to binary.Write. 
-func (h *header) writeHeader(w io.Writer) error {
+func (h *Header) WriteHeader(w io.Writer) error {
 
 	if err := binary.Write(w, binary.BigEndian, [4]byte{'C', 'D', 'F', byte(h.version)}); err != nil {
 		return err
@@ -214,8 +214,8 @@ func (w *nullWriter) Write(p []byte) (int, error) {
 }
 
 // return the size in bytes of the serialized header
-func (h *header) size() int64 {
+func (h *Header) size() int64 {
 	var nw nullWriter
-	h.writeHeader(&nw)
+	h.WriteHeader(&nw)
 	return int64(nw)
 }

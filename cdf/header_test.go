@@ -60,7 +60,7 @@ func readWriteCompare(srcpath string, t *testing.T) {
 		return
 	}
 
-	src, err := readHeader(srcf)
+	src, err := ReadHeader(srcf)
 	if err != nil {
 		t.Error(err)
 		return
@@ -72,22 +72,24 @@ func readWriteCompare(srcpath string, t *testing.T) {
 		return
 	}
 
-	dst := newHeader(src.version, src.Dimensions(""), src.Lengths(""))
+	dst := NewHeader(src.Dimensions(""), src.Lengths(""))
 
 	dst.numrecs = src.numrecs // cheat
 
 	for _, a := range src.Attributes("") {
-		dst.addAttribute("", a, src.GetAttribute("", a))
+		dst.AddAttribute("", a, src.GetAttribute("", a))
 	}
 
 	for _, v := range src.Variables() {
-		dst.addVariable(v, src.Dimensions(v), src.ZeroValue(v, 0))
+		dst.AddVariable(v, src.Dimensions(v), src.ZeroValue(v, 0))
 		for _, a := range src.Attributes(v) {
-			dst.addAttribute(v, a, src.GetAttribute(v, a))
+			dst.AddAttribute(v, a, src.GetAttribute(v, a))
 		}
 	}
 
-	dst.setOffsets(src.dataStart())
+	// cheat; normally this is done by Define, but we need bit for bit equality
+	dst.setOffsets(src.dataStart()) 
+	dst.version = src.version
 
 	dstf, err := ioutil.TempFile("", "")
 	if err != nil {
@@ -98,7 +100,7 @@ func readWriteCompare(srcpath string, t *testing.T) {
 	//	log.Println("tmp file: ", dstf.Name())
 	defer os.Remove(dstf.Name())
 
-	if err := dst.writeHeader(dstf); err != nil {
+	if err := dst.WriteHeader(dstf); err != nil {
 		t.Error(err)
 		return
 	}

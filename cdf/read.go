@@ -176,11 +176,11 @@ func (v *variable) readFrom(r io.Reader, offs64 bool) (err error) {
 }
 
 // readHeader decodes the CDF header from the io.Reader at the current position.
-// On success readHeader returns a header struct and a nil error.
+// On success readHeader returns an immutable header struct and a nil error.
 // If an error occurs that prevents further reading, the reader is left at the
 // error position and err is set to badMagic, badVersion, badTag, badLenght or badAttributeType,
 // or the error from the underlying call to binary.Read. 
-func readHeader(r io.Reader) (*header, error) {
+func ReadHeader(r io.Reader) (*Header, error) {
 	var (
 		magic       [3]byte
 		version     version
@@ -203,7 +203,7 @@ func readHeader(r io.Reader) (*header, error) {
 		return nil, badVersion
 	}
 
-	h := &header{version: version}
+	h := &Header{version: version}
 
 	if err := binary.Read(r, binary.BigEndian, &h.numrecs); err != nil {
 		return nil, err

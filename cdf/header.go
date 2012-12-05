@@ -164,11 +164,14 @@ type variable struct {
 
 // A CDF file contains a header and a data section.
 // The header defines the contents and layout of the data section.
-// The header layout is specified by
+// The serialized header layout is specified by
 // 	http://www.unidata.ucar.edu/software/netcdf/docs/classic_format_spec.html
-type header struct {
+//
+// A header read with ReadHeader can not be modified.  A header created with NewHeader
+// can be modified with AddVariable and AddAttribute until the call to Define.
+type Header struct {
 	version version
-	numrecs int32
+	numrecs int32 // not used by this library
 	dim     []dimension
 	att     []attribute
 	vars    []variable
@@ -176,7 +179,7 @@ type header struct {
 
 // Find the index of the dimension named v, or return -1.
 // Linear scan but unlikely to matter. 
-func (h *header) dimByName(v string) int {
+func (h *Header) dimByName(v string) int {
 	for i := range h.dim {
 		if h.dim[i].name == v {
 			return i
@@ -188,7 +191,7 @@ func (h *header) dimByName(v string) int {
 // Find the the variable named v, or return nil.
 // The returned pointer may be invalidated by a call to header.AddVariable.
 // Linear scan but unlikely to matter. 
-func (h *header) varByName(v string) *variable {
+func (h *Header) varByName(v string) *variable {
 	for i := range h.vars {
 		if h.vars[i].name == v {
 			return &h.vars[i]
@@ -201,7 +204,7 @@ func (h *header) varByName(v string) *variable {
 // or in the global variables if v == "". returns nil
 // if there is no such attibute.
 // Linear scan but unlikely to matter. 
-func (h *header) attrByName(v, a string) *attribute {
+func (h *Header) attrByName(v, a string) *attribute {
 	attr := &h.att
 	if v != "" {
 		vv := h.varByName(v)
@@ -221,7 +224,7 @@ func (h *header) attrByName(v, a string) *attribute {
 // Dimensions returns a slice with the names of the dimensions for variable v,
 // all dimensions if v == "", or nil if v is not a valid variable.
 // Only call on headers for which check returns nil.
-func (h *header) Dimensions(v string) []string {
+func (h *Header) Dimensions(v string) []string {
 	if v == "" {
 		r := make([]string, len(h.dim))
 		for i := range h.dim {
@@ -244,7 +247,7 @@ func (h *header) Dimensions(v string) []string {
 // Lengths returns a slice with the lenghts of the dimensions for variable v,
 // all dimensions if v == "", or nil if v is not a valid variable.
 // Only call on headers for which check returns nil.
-func (h *header) Lengths(v string) []int {
+func (h *Header) Lengths(v string) []int {
 	if v == "" {
 		r := make([]int, len(h.dim))
 		for i := range h.dim {
@@ -262,7 +265,7 @@ func (h *header) Lengths(v string) []int {
 
 // lengths returns a slice with the lenghts of the dimensions for variable v, which should be
 // a member of h.
-func (h *header) lengths(v *variable) []int {
+func (h *Header) lengths(v *variable) []int {
 	r := make([]int, len(v.dim))
 	for j, d := range v.dim {
 		r[j] = int(h.dim[d].length)
@@ -273,7 +276,7 @@ func (h *header) lengths(v *variable) []int {
 // ZeroValue returns a zeroed slice of the type of the variable v of length n.
 // If the named variable does not exist in h, Zero returns nil.
 // For type CHAR, Zero returns an empty string.
-func (h *header) ZeroValue(v string, n int) interface{} {
+func (h *Header) ZeroValue(v string, n int) interface{} {
 	vv := h.varByName(v)
 	if vv == nil {
 		return nil
@@ -283,11 +286,11 @@ func (h *header) ZeroValue(v string, n int) interface{} {
 
 // IsRecordVariable returns true iff a variable named v exists and its outermost dimension
 // is the header's (unique) record dimension.
-func (h *header) IsRecordVariable(v string) bool {
+func (h *Header) IsRecordVariable(v string) bool {
 	return h.isRecordVariable(h.varByName(v))
 }
 
-func (h *header) isRecordVariable(vv *variable) bool {
+func (h *Header) isRecordVariable(vv *variable) bool {
 	if vv == nil || len(vv.dim) == 0 {
 		return false
 	}
@@ -295,7 +298,7 @@ func (h *header) isRecordVariable(vv *variable) bool {
 }
 
 // Variables returns a slice with the names of all variables defined in the header.
-func (h *header) Variables() []string {
+func (h *Header) Variables() []string {
 	r := make([]string, len(h.vars))
 	for i := range h.vars {
 		r[i] = h.vars[i].name
@@ -305,7 +308,7 @@ func (h *header) Variables() []string {
 
 // Variables returns a slice with the names of all attributes defined in the header,
 // for variable v.  If v is the empty string, returns all global attributes.
-func (h *header) Attributes(v string) []string {
+func (h *Header) Attributes(v string) []string {
 	attr := &h.att
 	if v != "" {
 		vv := h.varByName(v)
@@ -326,7 +329,7 @@ func (h *header) Attributes(v string) []string {
 // value is of type  []int8, string, []int16, []int32,
 // []float32 or []float64 and should not be modified by the caller,
 // as it is shared by all callers.
-func (h *header) GetAttribute(v, a string) interface{} {
+func (h *Header) GetAttribute(v, a string) interface{} {
 	attr := h.attrByName(v, a)
 	if attr == nil {
 		return nil
@@ -334,11 +337,18 @@ func (h *header) GetAttribute(v, a string) interface{} {
 	return attr.values
 }
 
-// Newheader constructs a new CDF header of the specified version.
+
+// Newheader constructs a new mutable CDF header.
 // dims and sizes specify the names and lengths of the dimensions.
 // Invalid dimension or size specifications, repeated dimension names,
 // as well as the occurence of more than 1 record dimension (size == 0) lead to panics.
-func newHeader(v version, dims []string, sizes []int) *header {
+func NewHeader(dims []string, sizes []int) *Header { return newHeader(0, dims, sizes) }
+
+// newheader constructs a new CDF header of the specified version.
+// dims and sizes specify the names and lengths of the dimensions.
+// Invalid dimension or size specifications, repeated dimension names,
+// as well as the occurence of more than 1 record dimension (size == 0) lead to panics.
+func newHeader(v version, dims []string, sizes []int) *Header {
 
 	if len(dims) != len(sizes) {
 		panic("dims and sizes should be of same length")
@@ -363,7 +373,7 @@ func newHeader(v version, dims []string, sizes []int) *header {
 		}
 	}
 
-	h := &header{version: v, dim: make([]dimension, len(dims))}
+	h := &Header{version: v, dim: make([]dimension, len(dims))}
 	for i, v := range dims {
 		h.dim[i] = dimension{name: v, length: int32(sizes[i])}
 	}
@@ -377,7 +387,12 @@ func newHeader(v version, dims []string, sizes []int) *header {
 // The datatype is determined from the dynamic type of val, which may be
 // one of []int8, string, []int16, []int32, []float32 or []float64.  Any
 // other type will lead to a panic.  The contents of val are ignored.
-func (h *header) addVariable(v string, dims []string, val interface{}) {
+// The header must be mutable, i.e. created by NewHeader, not by ReadHeader.
+func (h *Header) AddVariable(v string, dims []string, val interface{}) {
+	if !h.isMutable() {
+		panic("cannot call AddVariable on an immutable header")
+	}
+
 	if h.varByName(v) != nil {
 		panic("repeated add of variable " + v)
 	}
@@ -420,7 +435,12 @@ func (h *header) addVariable(v string, dims []string, val interface{}) {
 // if v is the empty string.  Use of a nonexistent variable name or an existent attribute name leads to a panic.
 // The value can be of type []int8, string, []int16, []int32, []float32 or []float64, and will be stored
 // as NetCDF type  BYTE, CHAR, SHORT, INT, FLOAT, DOUBLE resp.
-func (h *header) addAttribute(v, a string, val interface{}) {
+// The header must be mutable, i.e. created by NewHeader, not by ReadHeader.
+func (h *Header) AddAttribute(v, a string, val interface{}) {
+	if !h.isMutable() {
+		panic("cannot call AddAttribute on an immutable header")
+	}
+
 	att := &h.att
 	if v != "" {
 		vv := h.varByName(v)
@@ -442,7 +462,7 @@ func (h *header) addAttribute(v, a string, val interface{}) {
 }
 
 // String returns a summary dump of the header, suitable for debugging.
-func (h *header) String() string {
+func (h *Header) String() string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "version:%v\ndimensions:\n", h.version)
 	for i := range h.dim {
@@ -496,7 +516,7 @@ func (h *header) String() string {
 // - only the first dimension can be the record dimension
 // - offsets of non-variable records increasing, large enough and all before variable records
 // - offset of variable records also increasing, large enough
-func (h *header) Check() (errs []error) {
+func (h *Header) Check() (errs []error) {
 	var x []string
 	for i := range h.dim {
 		if h.dim[i].length == 0 {
@@ -590,7 +610,7 @@ func (h *header) Check() (errs []error) {
 // should be the slabsize, not ny*nx*dsz.  If there is only 1 record variable
 // it will not be padded.  because the first entry is not used in index->offset
 // calculations we will store the (real, not fictional) vsize there.
-func (h *header) strides() [][]int64 {
+func (h *Header) strides() [][]int64 {
 	strides := make([][]int64, len(h.vars))
 
 	recvars := 0
@@ -634,15 +654,12 @@ func (h *header) strides() [][]int64 {
 }
 
 // DataStart returns the offset of the first variable.
-func (h *header) dataStart() int64 {
-	ds := (h.size() + 3) &^ 3
-
-	if len(h.vars) == 0 || h.vars[0].begin == 0 {
-		// not set, undefined file
-		return ds
+func (h *Header) dataStart() int64 {
+	if h.isMutable() {
+		return pad4(h.size())
 	}
 
-	ds = h.vars[0].begin
+	ds := h.vars[0].begin
 
 	for i := range h.vars {
 		if !h.isRecordVariable(&h.vars[i]) {
@@ -657,7 +674,7 @@ func (h *header) dataStart() int64 {
 // Set the vars[*].begin fields starting at max(start, h.size)
 // returns the values of the first and last offset.
 // if there are no variables, last will be zero
-func (h *header) setOffsets(start int64) (first, last int64) {
+func (h *Header) setOffsets(start int64) (first, last int64) {
 	offs := h.size()
 
 	if start > offs {
@@ -685,4 +702,20 @@ func (h *header) setOffsets(start int64) (first, last int64) {
 	}
 
 	return
+}
+
+// as long as the version is not set, this is a mutable header
+func (h *Header) isMutable() bool { return h.version == 0 }
+
+// Define makes a mutable header immutable by calculating the variable offsets and setting
+// the version number to V1 or V2, depending on whether the offsets require 64-bit offsets or not.
+func (h *Header) Define() {
+	if !h.isMutable() {
+		panic("cannot Define an immutable header")
+	}
+	if _, last := h.setOffsets(h.dataStart()); last < (1<<31) {
+		h.version = _V1
+	} else {
+		h.version = _V2
+	}
 }
