@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This file contains the header structure and related code.
+
 package cdf
 
 import (
@@ -39,6 +41,8 @@ func (v version) String() string {
 	}
 	return fmt.Sprintf("<%d>", byte(v))
 }
+
+const _STREAMING = int32(-1) // value of numrecs meaning 'indeterminate'
 
 // A datatype encodes the NetCDF data type of a variable or attribute.
 type datatype int32
@@ -90,6 +94,7 @@ func (d datatype) Zero(n int) interface{} {
 }
 
 // DataTypeFromValues maps the type of val to its corresponding datatype.
+//
 // The only valid dynamic types of val are 
 // []int8, string, []int16, []int32, []float32 or []float64.
 // Any other type of val returns the zero (invalid) datatype).
@@ -154,16 +159,65 @@ func (a *attribute) Fprint(w io.Writer, pfx string) {
 
 // An NetCDF variable as represented in the header
 type variable struct {
+	// stored
 	name  string
 	dim   []int32 // indices into header.dim
 	att   []attribute
 	dtype datatype
 	vsize int32 // set as per spec but not used by this library
 	begin int64
+
+	// computed
+	lengths []int // header.dim[v.dim[i]].length
+
+	// for a non-record variable, this is { nz*ny*nx*dsz, ny*nx*dsz, nx*dsz, dsz}
+	// for a record variable this is { ny*nx*dsz, slabsize, nx*dsz, dsz }
+	strides []int64
+}
+
+func (v *variable) isRecordVariable() bool { return len(v.lengths) > 0 && v.lengths[0] == 0 }
+func (v *variable) vSize() int64           { return v.strides[0] }
+
+func (v *variable) setComputed(dims []dimension) {
+	v.lengths = make([]int, len(v.dim))
+	for i, d := range v.dim {
+		if d >= 0 && d < int32(len(dims)) {
+			v.lengths[i] = int(dims[d].length)
+		}
+	}
+
+	v.strides = make([]int64, len(v.dim)+1)
+	v.strides[len(v.dim)] = int64(v.dtype.storageSize())
+	for i := len(v.dim) - 1; i >= 0; i-- {
+		v.strides[i] = int64(v.lengths[i]) * v.strides[i+1]
+	}
+
+	vsize := v.strides[0]
+	if vsize == 0 && len(v.strides) > 1 {
+		vsize = v.strides[1]
+	}
+	vsize = pad4(vsize)
+	// the spec is ambiguous, it says s > 1<<32-4...
+	// but the grammar says NON_NEG is a positive INT
+	// and INT is a signed 32 bit big endian, so we'll set it it 0xffff/-1 if 
+	if vsize > (1<<31 - 4) {
+		v.vsize = -1
+	} else {
+		v.vsize = int32(vsize)
+	}
+}
+
+func (v *variable) offsetOf(idx []int) int64 {
+	o := v.begin
+	for i, x := range idx {
+		o += int64(x) * v.strides[i+1]
+	}
+	return o
 }
 
 // A CDF file contains a header and a data section.
-// The header defines the contents and layout of the data section.
+// The header defines the layout of the data section.
+//
 // The serialized header layout is specified by
 // 	http://www.unidata.ucar.edu/software/netcdf/docs/classic_format_spec.html
 //
@@ -223,7 +277,8 @@ func (h *Header) attrByName(v, a string) *attribute {
 
 // Dimensions returns a slice with the names of the dimensions for variable v,
 // all dimensions if v == "", or nil if v is not a valid variable.
-// Only call on headers for which check returns nil.
+//
+// May panic on un-Check-ed headers.
 func (h *Header) Dimensions(v string) []string {
 	if v == "" {
 		r := make([]string, len(h.dim))
@@ -244,9 +299,10 @@ func (h *Header) Dimensions(v string) []string {
 	return r
 }
 
-// Lengths returns a slice with the lenghts of the dimensions for variable v,
+// Lengths returns a slice with the lengths of the dimensions for variable v,
 // all dimensions if v == "", or nil if v is not a valid variable.
-// Only call on headers for which check returns nil.
+//
+// May panic on un-Check-ed headers.
 func (h *Header) Lengths(v string) []int {
 	if v == "" {
 		r := make([]int, len(h.dim))
@@ -260,17 +316,7 @@ func (h *Header) Lengths(v string) []int {
 	if vv == nil {
 		return nil
 	}
-	return h.lengths(vv)
-}
-
-// lengths returns a slice with the lenghts of the dimensions for variable v, which should be
-// a member of h.
-func (h *Header) lengths(v *variable) []int {
-	r := make([]int, len(v.dim))
-	for j, d := range v.dim {
-		r[j] = int(h.dim[d].length)
-	}
-	return r
+	return vv.lengths
 }
 
 // ZeroValue returns a zeroed slice of the type of the variable v of length n.
@@ -287,14 +333,11 @@ func (h *Header) ZeroValue(v string, n int) interface{} {
 // IsRecordVariable returns true iff a variable named v exists and its outermost dimension
 // is the header's (unique) record dimension.
 func (h *Header) IsRecordVariable(v string) bool {
-	return h.isRecordVariable(h.varByName(v))
-}
-
-func (h *Header) isRecordVariable(vv *variable) bool {
-	if vv == nil || len(vv.dim) == 0 {
+	vv := h.varByName(v)
+	if vv == nil {
 		return false
 	}
-	return h.dim[vv.dim[0]].length == 0
+	return vv.isRecordVariable()
 }
 
 // Variables returns a slice with the names of all variables defined in the header.
@@ -337,29 +380,31 @@ func (h *Header) GetAttribute(v, a string) interface{} {
 	return attr.values
 }
 
-
-// Newheader constructs a new mutable CDF header.
-// dims and sizes specify the names and lengths of the dimensions.
+// Newheader constructs a new CDF header.
+//
+// dims and lengths specify the names and lengths of the dimensions.
 // Invalid dimension or size specifications, repeated dimension names,
 // as well as the occurence of more than 1 record dimension (size == 0) lead to panics.
-func NewHeader(dims []string, sizes []int) *Header { return newHeader(0, dims, sizes) }
+//
+// Until the call to h.Define() the version of the header will not be set, and the header will mutable,
+// meaning it can be modified by AddAttribute or AddVariable.
+//
+// The 'numrecs' field in the header, not used by this library, will be set to -1, meaning 'STREAMING'
+// according to the spec.
+func NewHeader(dims []string, lengths []int) *Header { return newHeader(0, dims, lengths) }
 
 // newheader constructs a new CDF header of the specified version.
-// dims and sizes specify the names and lengths of the dimensions.
-// Invalid dimension or size specifications, repeated dimension names,
-// as well as the occurence of more than 1 record dimension (size == 0) lead to panics.
-func newHeader(v version, dims []string, sizes []int) *Header {
-
-	if len(dims) != len(sizes) {
+func newHeader(v version, dims []string, lengths []int) *Header {
+	if len(dims) != len(lengths) {
 		panic("dims and sizes should be of same length")
 	}
 
 	recdim := -1
 	for i, s := range dims {
-		if sizes[i] < 0 {
-			panic("invalid dimension lenght")
+		if lengths[i] < 0 {
+			panic("invalid dimension length")
 		}
-		if sizes[i] == 0 {
+		if lengths[i] == 0 {
 			if recdim == -1 {
 				recdim = i
 			} else {
@@ -373,20 +418,23 @@ func newHeader(v version, dims []string, sizes []int) *Header {
 		}
 	}
 
-	h := &Header{version: v, dim: make([]dimension, len(dims))}
+	h := &Header{version: v, numrecs: _STREAMING, dim: make([]dimension, len(dims))}
 	for i, v := range dims {
-		h.dim[i] = dimension{name: v, length: int32(sizes[i])}
+		h.dim[i] = dimension{name: v, length: int32(lengths[i])}
 	}
 
 	return h
 }
 
 // AddVariable adds a variable of given type with the named dimensions to the header.
+//
 // Use of an existing variable name, or a nonexistent dimension name leads to a panic,
 // as does use of the record dimension for any other than the first.
+//
 // The datatype is determined from the dynamic type of val, which may be
 // one of []int8, string, []int16, []int32, []float32 or []float64.  Any
 // other type will lead to a panic.  The contents of val are ignored.
+//
 // The header must be mutable, i.e. created by NewHeader, not by ReadHeader.
 func (h *Header) AddVariable(v string, dims []string, val interface{}) {
 	if !h.isMutable() {
@@ -402,37 +450,27 @@ func (h *Header) AddVariable(v string, dims []string, val interface{}) {
 		panic("invalid attribute value type")
 	}
 
-	vsize := int64(d.storageSize())
-
 	dim := make([]int32, len(dims))
 	for i, dd := range dims {
 		d := h.dimByName(dd)
 		if d < 0 {
 			panic("invalid dimension")
 		}
-		if h.dim[d].length == 0 {
-			if i != 0 {
-				panic("record dimension not outermost")
-			}
-		} else {
-			vsize *= int64(h.dim[d].length)
+		if h.dim[d].length == 0 && i != 0 {
+			panic("record dimension not outermost")
 		}
+
 		dim[i] = int32(d)
 	}
 
-	vsize = pad4(vsize)
-	// the spec is ambiguous, it says s > 1<<32-4...
-	// but the grammar says NON_NEG is a positive INT
-	// and INT is a signed 32 bit big endian, so we'll set it it 0xffff/-1 if 
-	if vsize > (1<<31 - 4) {
-		vsize = -1
-	}
-
-	h.vars = append(h.vars, variable{name: v, dim: dim, dtype: d, vsize: int32(vsize)})
+	h.vars = append(h.vars, variable{name: v, dim: dim, dtype: d})
+	h.vars[len(h.vars)-1].setComputed(h.dim)
 }
 
 // AddAttribute adds an attribute named a to a variable named v, or to the global attributes
-// if v is the empty string.  Use of a nonexistent variable name or an existent attribute name leads to a panic.
+// if v is the empty string.
+//
+// Use of a nonexistent variable name or an existent attribute name leads to a panic.
 // The value can be of type []int8, string, []int16, []int32, []float32 or []float64, and will be stored
 // as NetCDF type  BYTE, CHAR, SHORT, INT, FLOAT, DOUBLE resp.
 // The header must be mutable, i.e. created by NewHeader, not by ReadHeader.
@@ -507,14 +545,22 @@ func (h *Header) String() string {
 	return b.String()
 }
 
-// Check verifies the integrity of the header.
+// Check verifies the integrity of the header:
+//
 // - at most one record dimension
+//
 // - no duplicate dimension names
+//
 // - no duplicate attribute names
+//
 // - no duplicate variable names
+//
 // - variable dimensions valid
+//
 // - only the first dimension can be the record dimension
+//
 // - offsets of non-variable records increasing, large enough and all before variable records
+//
 // - offset of variable records also increasing, large enough
 func (h *Header) Check() (errs []error) {
 	var x []string
@@ -574,60 +620,39 @@ func (h *Header) Check() (errs []error) {
 	}
 
 	// check offsets increase in the right order and fit vsizes
-	strides := h.strides()
 	offs := pad4(h.size())
 
 	for i := range h.vars {
-		if !h.isRecordVariable(&h.vars[i]) {
+		if !h.vars[i].isRecordVariable() {
 			if h.vars[i].begin&3 != 0 || h.vars[i].begin < offs {
 				errs = append(errs, fmt.Errorf("variable %s offset %d invalid", h.vars[i].name, h.vars[i].begin))
 			}
 			offs = h.vars[i].begin
-			offs += pad4(strides[i][0])
+			offs += pad4(h.vars[i].strides[0])
 		}
 	}
 
 	for i := range h.vars {
-		if h.isRecordVariable(&h.vars[i]) {
+		if h.vars[i].isRecordVariable() {
 			if h.vars[i].begin&3 != 0 || h.vars[i].begin < offs {
 				errs = append(errs, fmt.Errorf("variable %s offset %d invalid", h.vars[i].name, h.vars[i].begin))
 			}
 			offs = h.vars[i].begin
-			offs += pad4(strides[i][0])
+			offs += pad4(h.vars[i].strides[0])
 		}
 	}
 
 	return
 }
 
-// TODO
-// calculate numrecs from header and filesize
-
-// strides computes the stride array
-// eg for a non-record variable of rank 3, nz * ny * nx:
-// strides = []int64{ nz*ny*nx*dzs, ny*nx*dsz ,nx*dsz ,dsz }
-// for a record variable, nz == 0 if computed like this, and the [1] entry
-// should be the slabsize, not ny*nx*dsz.  If there is only 1 record variable
-// it will not be padded.  because the first entry is not used in index->offset
-// calculations we will store the (real, not fictional) vsize there.
-func (h *Header) strides() [][]int64 {
-	strides := make([][]int64, len(h.vars))
-
+func (h *Header) fixRecordStrides() {
 	recvars := 0
 	var slabsize int64
 
 	for i := range h.vars {
-		d := len(h.vars[i].dim)
-		strides[i] = make([]int64, d+1)
-		strides[i][d] = int64(h.vars[i].dtype.storageSize())
-
-		for j := d - 1; j >= 0; j-- {
-			strides[i][j] = strides[i][j+1] * int64(h.dim[h.vars[i].dim[j]].length)
-		}
-
-		if strides[i][0] == 0 {
+		if h.vars[i].strides[0] == 0 && len(h.vars[i].strides) > 1 {
 			recvars++
-			slabsize = strides[i][1]
+			slabsize = h.vars[i].strides[1]
 		}
 	}
 
@@ -635,22 +660,20 @@ func (h *Header) strides() [][]int64 {
 	// otherwise recompute based on all of the vsizes of the record variables
 	if recvars > 1 {
 		slabsize = 0
-		for i := range strides {
-			if strides[i][0] == 0 { // is record variable
-				slabsize += (strides[i][1] + 3) &^ 3
+		for i := range h.vars {
+			if h.vars[i].strides[0] == 0 { // is record variable
+				slabsize += pad4(h.vars[i].strides[1])
 			}
 		}
 	}
 
-	for i := range strides {
-		if strides[i][0] == 0 {
+	for i := range h.vars {
+		if h.vars[i].strides[0] == 0 {
 			// save the vsize in the [0] entry which is not used for indexing anyway
-			strides[i][0] = strides[i][1]
-			strides[i][1] = slabsize
+			h.vars[i].strides[0] = h.vars[i].strides[1]
+			h.vars[i].strides[1] = slabsize
 		}
 	}
-
-	return strides
 }
 
 // DataStart returns the offset of the first variable.
@@ -662,7 +685,7 @@ func (h *Header) dataStart() int64 {
 	ds := h.vars[0].begin
 
 	for i := range h.vars {
-		if !h.isRecordVariable(&h.vars[i]) {
+		if !h.vars[i].isRecordVariable() {
 			ds = h.vars[i].begin
 			break
 		}
@@ -676,28 +699,26 @@ func (h *Header) dataStart() int64 {
 // if there are no variables, last will be zero
 func (h *Header) setOffsets(start int64) (first, last int64) {
 	offs := h.size()
-
-	if start > offs {
+	if offs < start {
 		offs = start
 	}
 
 	offs = pad4(offs)
 	first = offs
-	strides := h.strides()
 
 	for i := range h.vars {
-		if !h.isRecordVariable(&h.vars[i]) {
+		if !h.vars[i].isRecordVariable() {
 			h.vars[i].begin = offs
 			last = offs
-			offs += pad4(strides[i][0])
+			offs += pad4(h.vars[i].vSize())
 		}
 	}
 
 	for i := range h.vars {
-		if h.isRecordVariable(&h.vars[i]) {
+		if h.vars[i].isRecordVariable() {
 			h.vars[i].begin = offs
 			last = offs
-			offs += pad4(strides[i][0])
+			offs += pad4(h.vars[i].vSize())
 		}
 	}
 
@@ -713,9 +734,26 @@ func (h *Header) Define() {
 	if !h.isMutable() {
 		panic("cannot Define an immutable header")
 	}
-	if _, last := h.setOffsets(h.dataStart()); last < (1<<31) {
+
+	h.fixRecordStrides()
+
+	// version must be set before call to dataStart/setOffsets.  Theoretically
+	// writing 64 bit offsets instead of 32 bit can affect the value of dataStart.
+	h.version = _V2
+	if _, last := h.setOffsets(h.dataStart()); last < (1 << 31) {
 		h.version = _V1
-	} else {
-		h.version = _V2
 	}
+}
+
+func (h *Header) slabs() (offs, size int64) {
+
+	for i := range h.vars {
+		if h.vars[i].isRecordVariable() {
+			offs = h.vars[i].begin
+			size = h.vars[i].strides[1] // slabsize
+			break
+		}
+	}
+
+	return
 }

@@ -50,10 +50,11 @@ func testAllFiles(t *testing.T, tf func(string, *testing.T)) {
 }
 
 func TestBinaryCompatibility(t *testing.T) {
-	testAllFiles(t, readWriteCompare)
+	binaryCompatibleStringReading = true
+	testAllFiles(t, readWriteCompareHeader)
 }
 
-func readWriteCompare(srcpath string, t *testing.T) {
+func readWriteCompareHeader(srcpath string, t *testing.T) {
 	srcf, err := os.Open(srcpath)
 	if err != nil {
 		t.Error(err)
@@ -74,8 +75,6 @@ func readWriteCompare(srcpath string, t *testing.T) {
 
 	dst := NewHeader(src.Dimensions(""), src.Lengths(""))
 
-	dst.numrecs = src.numrecs // cheat
-
 	for _, a := range src.Attributes("") {
 		dst.AddAttribute("", a, src.GetAttribute("", a))
 	}
@@ -88,8 +87,20 @@ func readWriteCompare(srcpath string, t *testing.T) {
 	}
 
 	// cheat; normally this is done by Define, but we need bit for bit equality
-	dst.setOffsets(src.dataStart()) 
+	dst.fixRecordStrides()
 	dst.version = src.version
+	dst.setOffsets(src.dataStart())
+
+	fi, err := srcf.Stat()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	dst.setNumRecs(fi.Size())
+	if dst.numrecs != src.numrecs {
+		t.Errorf("computed numrecs %d != original numrecs %d", dst.numrecs, src.numrecs)
+		dst.numrecs = src.numrecs
+	}
 
 	dstf, err := ioutil.TempFile("", "")
 	if err != nil {
@@ -111,6 +122,8 @@ func readWriteCompare(srcpath string, t *testing.T) {
 		return
 	}
 
+	// compare
+
 	srcf.Seek(0, 0)
 	dstf.Seek(0, 0)
 
@@ -123,5 +136,4 @@ func readWriteCompare(srcpath string, t *testing.T) {
 			break
 		}
 	}
-
 }

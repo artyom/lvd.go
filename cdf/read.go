@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This file contains the code to deserialize cdf headers.
+
 package cdf
 
 import (
@@ -30,6 +32,9 @@ var (
 	badAttributeType = errors.New("Invalid attribute storage type")
 )
 
+// set this to true in tests to read all strings including the trailing zeros
+var binaryCompatibleStringReading = false
+
 // read an (int32, []byte) encoded string
 func readString(r io.Reader) (s string, err error) {
 	var nelems int32
@@ -47,8 +52,13 @@ func readString(r io.Reader) (s string, err error) {
 	if err != nil {
 		return "", err
 	}
-	// commented out for for binary compatibility:
-	//	for nelems > 0 && buf[nelems-1] == 0 { nelems-- }
+
+	if !binaryCompatibleStringReading {
+		for nelems > 0 && buf[nelems-1] == 0 {
+			nelems--
+		}
+	}
+
 	return string(buf[:nelems]), nil
 }
 
@@ -176,10 +186,11 @@ func (v *variable) readFrom(r io.Reader, offs64 bool) (err error) {
 }
 
 // readHeader decodes the CDF header from the io.Reader at the current position.
-// On success readHeader returns an immutable header struct and a nil error.
+// On success readHeader returns a header struct and a nil error.
 // If an error occurs that prevents further reading, the reader is left at the
 // error position and err is set to badMagic, badVersion, badTag, badLenght or badAttributeType,
-// or the error from the underlying call to binary.Read. 
+// or the error from the underlying call to binary.Read.
+// The returned header is immutable, meaning it may not be modified with AddVariable or AddAttribute.
 func ReadHeader(r io.Reader) (*Header, error) {
 	var (
 		magic       [3]byte
@@ -209,7 +220,7 @@ func ReadHeader(r io.Reader) (*Header, error) {
 		return nil, err
 	}
 
-	for i := 0; i < 3; i++ {
+	for ii := 0; ii < 3; ii++ {
 
 		if err := binary.Read(r, binary.BigEndian, &tag); err != nil {
 			return nil, err
@@ -228,8 +239,8 @@ func ReadHeader(r io.Reader) (*Header, error) {
 			}
 
 		case 0xA: // list of dimensions
-			if i != 0 {
-				log.Printf("Dimension section out of order: %d", i)
+			if ii != 0 {
+				log.Printf("Dimension section out of order: %d", ii)
 			}
 
 			h.dim = make([]dimension, nelems)
@@ -240,8 +251,8 @@ func ReadHeader(r io.Reader) (*Header, error) {
 			}
 
 		case 0xB: // list of variables
-			if i != 2 {
-				log.Printf("Variable section out of order: %d", i)
+			if ii != 2 {
+				log.Printf("Variable section out of order: %d", ii)
 			}
 
 			h.vars = make([]variable, nelems)
@@ -249,11 +260,12 @@ func ReadHeader(r io.Reader) (*Header, error) {
 				if err := h.vars[i].readFrom(r, h.version == _V2); err != nil {
 					return nil, err
 				}
+				h.vars[i].setComputed(h.dim)
 			}
 
 		case 0xC: // list of attributes
-			if i != 1 {
-				log.Printf("Global attribute section out of order: %d", i)
+			if ii != 1 {
+				log.Printf("Global attribute section out of order: %d", ii)
 			}
 
 			h.att = make([]attribute, nelems)
@@ -266,6 +278,8 @@ func ReadHeader(r io.Reader) (*Header, error) {
 			return nil, badTag
 		}
 	}
+
+	h.fixRecordStrides()
 
 	return h, nil
 }
