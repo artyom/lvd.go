@@ -20,13 +20,14 @@ package cdf
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"testing"
 )
 
 func TestData(t *testing.T) {
-	//	testAllFiles(t, readWriteCompareData)
+//	testAllFiles(t, readWriteCompareData)
 }
 
 func readWriteCompareData(srcpath string, t *testing.T) {
@@ -63,7 +64,21 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 	}
 
 	for _, v := range dst.Header.Variables() {
-		_ = v
+		r := src.Reader(v, nil, nil)
+		w := dst.Writer(v, nil, nil)
+		buf := r.Zero(-1)
+		for {
+			nr, err := r.Read(buf)
+			nw, erw := w.Write(buf)
+			if nr == nw && err == nil && erw == nil {
+				continue
+			}
+			if err == io.EOF {
+				break
+			}
+			t.Errorf("read: %v/%v write: %v/%v", nr, err, nw, erw)
+			break
+		}
 	}
 
 	UpdateNumRecs(dstf)
@@ -75,6 +90,10 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 
 	srcd, err := ioutil.ReadAll(srcf)
 	dstd, err := ioutil.ReadAll(dstf)
+	
+	if len(srcd) != len(dstd) {
+		t.Error(srcpath, ":different lengths", len(srcd), len(dstd))
+	}
 
 	for i := 0; i < len(srcd) && i < len(dstd); i++ {
 		if srcd[i] != dstd[i] {
