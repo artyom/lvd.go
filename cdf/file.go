@@ -51,15 +51,17 @@ func Open(rw ReaderWriterAt) (*File, error) {
 // usable for reading and writing.
 //
 // The header should not be mutable, and may be shared by multiple
-// Files.  Note in this case that at every Create the headers numrec
+// Files(*).  Note in this case that at every Create the headers numrec
 // field will be reset to -1 (STREAMING).
 func Create(rw ReaderWriterAt, h *Header) (*File, error) {
 	if h.isMutable() {
 		panic("Create must be called with a fully defined header")
 	}
-	h.numrecs = _STREAMING
+	nr := h.numrecs
+	h.numrecs = _STREAMING  // (*) potential race
 	var buf bytes.Buffer
 	err := h.WriteHeader(&buf)
+	h.numrecs = nr
 	if err != nil {
 		return nil, err
 	}

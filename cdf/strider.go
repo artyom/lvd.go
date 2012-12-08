@@ -85,17 +85,21 @@ func (f *File) strider(v string, begin, end []int) interface {
 	}
 
 	if end != nil {
-		e = vv.offsetOf(end)
+		e = vv.offsetOf(end) + int64(vv.dtype.storageSize())
 	} else if !vv.isRecordVariable() {
-		e = vv.offsetOf(vv.lengths)
+		l := make([]int, len(vv.lengths))
+		for i := range l {
+			l[i] = vv.lengths[i]-1
+		}
+		e = vv.offsetOf(l) + int64(vv.dtype.storageSize())
 	}
 
-	if !vv.isRecordVariable() {
-		sz = e - b
-		sk = e - b
-	} else {
+	if vv.isRecordVariable() {
 		sz = vv.strides[0] // vsize
 		sk = vv.strides[1] // slabsize
+	} else {
+		sz = e - b
+		sk = e - b
 	}
 
 	switch vv.dtype {

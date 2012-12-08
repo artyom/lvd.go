@@ -145,7 +145,7 @@ func TestReader(t *testing.T) {
 		r := dst.Reader("x", nil, nil)
 		buf := r.Zero(-1)
 		if b, ok := buf.([]int32); !ok || len(b) != 9 {
-			t.Fatal("bad Zero for x")
+			t.Fatal("bad Zero for x", len(b))
 		}
 		n, err := r.Read(buf)
 		if n != 9 || err != nil {

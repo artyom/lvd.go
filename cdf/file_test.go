@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"testing"
 )
 
 func TestData(t *testing.T) {
-//	testAllFiles(t, readWriteCompareData)
+	binaryCompatibleStringReading = true
+	testAllFiles(t, readWriteCompareData)
 }
 
 func readWriteCompareData(srcpath string, t *testing.T) {
@@ -63,9 +65,16 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		return
 	}
 
+//	log.Print(src.Header)
+
 	for _, v := range dst.Header.Variables() {
+
+		log.Print("copying ", v, "...")
+
 		r := src.Reader(v, nil, nil)
 		w := dst.Writer(v, nil, nil)
+//		log.Print("reader:", r)
+//		log.Print("writer:", w)
 		buf := r.Zero(-1)
 		for {
 			nr, err := r.Read(buf)
@@ -73,7 +82,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 			if nr == nw && err == nil && erw == nil {
 				continue
 			}
-			if err == io.EOF {
+			if erw == io.EOF {
 				break
 			}
 			t.Errorf("read: %v/%v write: %v/%v", nr, err, nw, erw)
