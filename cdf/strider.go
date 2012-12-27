@@ -89,7 +89,7 @@ func (f *File) strider(v string, begin, end []int) interface {
 	} else if !vv.isRecordVariable() {
 		l := make([]int, len(vv.lengths))
 		for i := range l {
-			l[i] = vv.lengths[i]-1
+			l[i] = vv.lengths[i] - 1
 		}
 		e = vv.offsetOf(l) + int64(vv.dtype.storageSize())
 	}
@@ -190,7 +190,7 @@ func (r *strider) Write(p []byte) (n int, err error) {
 		if err != nil {
 			return n, err
 		}
-		if r.curr >= r.end {
+		if r.end > 0 && r.curr >= r.end {
 			return n, io.EOF
 		}
 	}

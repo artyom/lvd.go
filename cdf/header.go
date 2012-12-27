@@ -505,7 +505,11 @@ func (h *Header) String() string {
 	fmt.Fprintf(&b, "version:%v\ndimensions:\n", h.version)
 	for i := range h.dim {
 		if h.dim[i].length == 0 { // the record dimension
-			fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (%d currently)\n", h.dim[i].name, h.numrecs)
+			if h.numrecs == _STREAMING {
+				fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (STREAMING)\n", h.dim[i].name)
+			} else {
+				fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (%d currently)\n", h.dim[i].name, h.numrecs)
+			}
 		} else {
 			fmt.Fprintf(&b, "\t%s = %d ;\n", h.dim[i].name, h.dim[i].length)
 		}

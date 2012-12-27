@@ -58,7 +58,7 @@ func Create(rw ReaderWriterAt, h *Header) (*File, error) {
 		panic("Create must be called with a fully defined header")
 	}
 	nr := h.numrecs
-	h.numrecs = _STREAMING  // (*) potential race
+	h.numrecs = _STREAMING // (*) potential race
 	var buf bytes.Buffer
 	err := h.WriteHeader(&buf)
 	h.numrecs = nr

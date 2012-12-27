@@ -56,7 +56,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		t.Error(err)
 		return
 	}
-	//	log.Println("tmp file: ", dstf.Name())
+//	log.Println("tmp file: ", dstf.Name())
 	defer os.Remove(dstf.Name())
 
 	dst, err := Create(dstf, src.Header)
@@ -67,30 +67,53 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 
 //	log.Print(src.Header)
 
-	for _, v := range dst.Header.Variables() {
+	for i, v := range dst.Header.Variables() {
 
-		log.Print("copying ", v, "...")
+		//log.Print("copying ", v, "...")
 
 		r := src.Reader(v, nil, nil)
 		w := dst.Writer(v, nil, nil)
-//		log.Print("reader:", r)
-//		log.Print("writer:", w)
+		//log.Print("reader:", r)
+		//log.Print("writer:", w)
 		buf := r.Zero(-1)
+		rc := 0
 		for {
 			nr, err := r.Read(buf)
-			nw, erw := w.Write(buf)
-			if nr == nw && err == nil && erw == nil {
-				continue
+			switch bb := buf.(type) {
+			case []int8:
+				buf = bb[:nr]
+			case []int16:
+				buf = bb[:nr]
+			case []int32:
+				buf = bb[:nr]
+			case []float32:
+				buf = bb[:nr]
+			case []float64:
+				buf = bb[:nr]
+			default:
+				t.Error("bad buffer type", buf)
 			}
-			if erw == io.EOF {
+			nw, erw := w.Write(buf)
+
+			//log.Printf("read: %v/%v write: %v/%v", nr, err, nw, erw)
+			rc += nr
+
+			if nr != nw || (erw != nil && erw != io.EOF) {
+				t.Errorf("read: %v/%v write: %v/%v", nr, err, nw, erw)
 				break
 			}
-			t.Errorf("read: %v/%v write: %v/%v", nr, err, nw, erw)
-			break
+			if err == io.EOF {
+				break
+			}
 		}
+
+		log.Print("copied ", rc, " values, expected ", dst.Header.vars[i].lengths)
 	}
 
-	UpdateNumRecs(dstf)
+	err = UpdateNumRecs(dstf)
+	if err != nil {
+		t.Error("updating numrecs", err)
+	}
 
 	// compare
 
@@ -99,14 +122,19 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 
 	srcd, err := ioutil.ReadAll(srcf)
 	dstd, err := ioutil.ReadAll(dstf)
-	
+
 	if len(srcd) != len(dstd) {
 		t.Error(srcpath, ":different lengths", len(srcd), len(dstd))
 	}
 
+	d := 0
 	for i := 0; i < len(srcd) && i < len(dstd); i++ {
 		if srcd[i] != dstd[i] {
 			t.Error(srcpath, ":difference at offset ", i)
+			d++
+		}
+		if d > 10 {
+			t.Error(srcpath, ": too many differences")
 			break
 		}
 	}

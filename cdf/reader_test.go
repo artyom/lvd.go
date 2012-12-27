@@ -157,6 +157,11 @@ func TestReader(t *testing.T) {
 				break
 			}
 		}
+		n, err = r.Read(buf)
+		if err != io.EOF {
+			t.Error("read x past eof:", buf)
+		}
+
 	}
 
 	{
@@ -174,6 +179,10 @@ func TestReader(t *testing.T) {
 				t.Error("bad y: ", buf)
 				break
 			}
+		}
+		n, err = r.Read(buf)
+		if err != io.EOF {
+			t.Error("read y past eof:", buf)
 		}
 
 	}
@@ -194,7 +203,10 @@ func TestReader(t *testing.T) {
 				break
 			}
 		}
-
+		n, err = r.Read(buf)
+		if err != io.EOF {
+			t.Error("read z past eof:", buf)
+		}
 	}
 
 	{
