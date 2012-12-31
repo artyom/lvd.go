@@ -56,8 +56,8 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		t.Error(err)
 		return
 	}
-//	log.Println("tmp file: ", dstf.Name())
-	defer os.Remove(dstf.Name())
+	log.Println("tmp file: ", dstf.Name())
+	//defer os.Remove(dstf.Name())
 
 	dst, err := Create(dstf, src.Header)
 	if err != nil {
@@ -65,11 +65,28 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		return
 	}
 
-//	log.Print(src.Header)
+	//log.Print(src.Header)
+
+	log.Print("filling ", src.Header.numrecs, " records")
+	for i := 0; i < int(src.Header.numrecs); i++ {
+		if err := dst.FillRecord(i); err != nil {
+			t.Error(err)
+			break
+		}
+	}
 
 	for i, v := range dst.Header.Variables() {
 
-		//log.Print("copying ", v, "...")
+		if !dst.Header.IsRecordVariable(v) {
+			log.Print("filling ", v, "...")
+			// TODO: only for dtype is BYTE or SHORT, save time
+			if err := dst.Fill(v); err != nil {
+				t.Error(err)
+				break
+			}
+		}
+
+		log.Print("copying ", v, "...")
 
 		r := src.Reader(v, nil, nil)
 		w := dst.Writer(v, nil, nil)
@@ -107,7 +124,17 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 			}
 		}
 
-		log.Print("copied ", rc, " values, expected ", dst.Header.vars[i].lengths)
+		exp := 1
+		for _, v := range dst.Header.vars[i].lengths {
+			if v == 0 {
+				exp *= int(dst.Header.numrecs)
+			} else {
+				exp *= v
+			}
+		}
+		if rc != exp {
+			log.Print("copied ", rc, " values, expected ", exp)
+		}
 	}
 
 	err = UpdateNumRecs(dstf)

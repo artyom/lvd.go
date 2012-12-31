@@ -125,6 +125,25 @@ func (d datatype) String() string {
 	return fmt.Sprintf("<%d>", int32(d))
 }
 
+// FillValue returns the data type's default fill value as per the spec.
+func (d datatype) FillValue() interface{} {
+	switch d {
+	case _BYTE:
+		return int8(-127)
+	case _CHAR:
+		return int8(0)
+	case _SHORT:
+		return int16(-32767)
+	case _INT:
+		return int32(-2147483647)
+	case _FLOAT:
+		return float32(9.9692099683868690e+36) // \x7C \xF0 \x00 \x00 
+	case _DOUBLE:
+		return float64(9.9692099683868690e+36) // \x47 \x9E \x00 \x00 \x00 \x00
+	}
+	return nil
+}
+
 // round x up to the nearest multiple of 4.
 func pad4(x int64) int64 { return (x + 3) &^ 3 }
 
@@ -213,6 +232,49 @@ func (v *variable) offsetOf(idx []int) int64 {
 		o += int64(x) * v.strides[i+1]
 	}
 	return o
+}
+
+// If the variable has a scalar attribute '_FillValue' of the same data type as the variable,
+// it will be returned, otherwise the type's default fill value will be returned
+func (v *variable) fillValue() interface{} {
+	for i := range v.att {
+		if v.att[i].name != "_FillValue" {
+			continue
+		}
+		if v.att[i].dtype != v.dtype {
+			break
+		}
+		switch vv := v.att[i].values.(type) {
+		case []int8:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		case string:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		case []int16:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		case []int32:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		case []float32:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		case []float64:
+			if len(vv) == 1 {
+				return vv[0]
+			}
+		default:
+			panic("invalid attribute value type")
+		}
+		break // length != 1
+	}
+	return v.dtype.FillValue()
 }
 
 // A CDF file contains a header and a data section.
@@ -328,6 +390,17 @@ func (h *Header) ZeroValue(v string, n int) interface{} {
 		return nil
 	}
 	return vv.dtype.Zero(n)
+}
+
+// Return the fill value for the variable v. 
+// If the variable has a scalar attribute '_FillValue' of the same data type as the variable,
+// it will be used, otherwise the type's default fill value will be used.
+func (h *Header) FillValue(v string) interface{} {
+	vv := h.varByName(v)
+	if vv == nil {
+		return nil
+	}
+	return vv.fillValue()
 }
 
 // IsRecordVariable returns true iff a variable named v exists and its outermost dimension

@@ -18,6 +18,7 @@ package cdf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 )
 
@@ -69,4 +70,48 @@ func Create(rw ReaderWriterAt, h *Header) (*File, error) {
 		return nil, err
 	}
 	return &File{rw: rw, Header: h}, nil
+}
+
+func fill(w io.WriterAt, begin, end int64, val interface{}, dtype datatype) error {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, val)
+	if buf.Len() != dtype.storageSize() {
+		panic("invalid fill value")
+	}
+	d := int64(buf.Len())
+	for ; begin < end; begin += d {
+		if _, err := w.WriteAt(buf.Bytes(), begin); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Fill overwrites the data for non-record variable named v with its fill value.
+// Fill panics if v does not name a non-record variable.
+// If the variable has a scalar attribute '_FillValue' of the same data type as the variable,
+// it will be used, otherwise the type's default fill value will be used.
+func (f *File) Fill(v string) error {
+	vv := f.Header.varByName(v)
+	if vv == nil || vv.isRecordVariable() {
+		panic("Fill for non-record variable")
+	}
+	return fill(f.rw, vv.begin, vv.begin+pad4(vv.vSize()), vv.fillValue(), vv.dtype)
+}
+
+// FillRecord overwrites the data for all record variables in the r'th slab with their fill values.
+func (f *File) FillRecord(r int) error {
+	_, slabsize := f.Header.slabs()
+	for i := range f.Header.vars {
+		vv := &f.Header.vars[i]
+		if !vv.isRecordVariable() {
+			continue
+		}
+		begin := vv.begin + int64(r)*slabsize
+		end := begin + pad4(vv.vSize())
+		if err := fill(f.rw, begin, end, vv.fillValue(), vv.dtype); err != nil {
+			return err
+		}
+	}
+	return nil
 }
