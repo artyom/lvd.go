@@ -27,12 +27,16 @@ import (
 	"testing"
 )
 
-func TestData(t *testing.T) {
-	testAllFiles(t, readWriteCompareData)
-}
+func TestData(t *testing.T) { testAllFiles(t, readWriteCompareData) }
 
 func readWriteCompareData(srcpath string, t *testing.T) {
 	srcf, err := os.Open(srcpath)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	srcfi, err := srcf.Stat()
 	if err != nil {
 		t.Error(err)
 		return
@@ -65,9 +69,10 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 	}
 
 	//log.Print(src.Header)
+	numrecs := src.Header.NumRecs(srcfi.Size())
 
 	//log.Print("filling ", src.Header.numrecs, " records")
-	for i := 0; i < int(src.Header.numrecs); i++ {
+	for i := 0; i < int(numrecs); i++ {
 		if err := dst.FillRecord(i); err != nil {
 			t.Error(err)
 			break
@@ -126,7 +131,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		exp := 1
 		for _, v := range dst.Header.vars[i].lengths {
 			if v == 0 {
-				exp *= int(dst.Header.numrecs)
+				exp *= int(numrecs)
 			} else {
 				exp *= v
 			}

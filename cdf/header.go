@@ -42,8 +42,6 @@ func (v version) String() string {
 	return fmt.Sprintf("<%d>", byte(v))
 }
 
-const _STREAMING = int32(-1) // value of numrecs meaning 'indeterminate'
-
 // A datatype encodes the NetCDF data type of a variable or attribute.
 type datatype int32
 
@@ -280,14 +278,17 @@ func (v *variable) fillValue() interface{} {
 // A CDF file contains a header and a data section.
 // The header defines the layout of the data section.
 //
-// The serialized header layout is specified by
+// The serialized header layout is specified by "The NetCDF Classic Format Specification"
 // 	http://www.unidata.ucar.edu/software/netcdf/docs/classic_format_spec.html
 //
 // A header read with ReadHeader can not be modified.  A header created with NewHeader
 // can be modified with AddVariable and AddAttribute until the call to Define.
+//
+// The NetCDF defined 'numrecs' field is ignored on reading and set to -1
+// ('STREAMING') on writing of the header, but can be read and written
+// separately.
 type Header struct {
 	version version
-	numrecs int32 // not used by this library
 	dim     []dimension
 	att     []attribute
 	vars    []variable
@@ -461,9 +462,6 @@ func (h *Header) GetAttribute(v, a string) interface{} {
 //
 // Until the call to h.Define() the version of the header will not be set, and the header will mutable,
 // meaning it can be modified by AddAttribute or AddVariable.
-//
-// The 'numrecs' field in the header, not used by this library, will be set to -1, meaning 'STREAMING'
-// according to the spec.
 func NewHeader(dims []string, lengths []int) *Header { return newHeader(0, dims, lengths) }
 
 // newheader constructs a new CDF header of the specified version.
@@ -491,7 +489,7 @@ func newHeader(v version, dims []string, lengths []int) *Header {
 		}
 	}
 
-	h := &Header{version: v, numrecs: _STREAMING, dim: make([]dimension, len(dims))}
+	h := &Header{version: v, dim: make([]dimension, len(dims))}
 	for i, v := range dims {
 		h.dim[i] = dimension{name: v, length: int32(lengths[i])}
 	}
@@ -578,11 +576,7 @@ func (h *Header) String() string {
 	fmt.Fprintf(&b, "version:%v\ndimensions:\n", h.version)
 	for i := range h.dim {
 		if h.dim[i].length == 0 { // the record dimension
-			if h.numrecs == _STREAMING {
-				fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (STREAMING)\n", h.dim[i].name)
-			} else {
-				fmt.Fprintf(&b, "\t%s = UNLIMITED ; // (%d currently)\n", h.dim[i].name, h.numrecs)
-			}
+			fmt.Fprintf(&b, "\t%s = UNLIMITED ;\n", h.dim[i].name)
 		} else {
 			fmt.Fprintf(&b, "\t%s = %d ;\n", h.dim[i].name, h.dim[i].length)
 		}
@@ -833,4 +827,21 @@ func (h *Header) slabs() (offs, size int64) {
 	}
 
 	return
+}
+
+// numRecs computes the number or records from the filesize, returns the real number of records.
+// For fsize < 0, returns -1.
+func (h *Header) NumRecs(fsize int64) int64 {
+	if fsize < 0 {
+		return -1
+	}
+
+	offs, size := h.slabs()
+
+	if size == 0 || fsize < offs {
+		return 0
+	}
+
+	nr := (fsize - offs) / size
+	return nr
 }

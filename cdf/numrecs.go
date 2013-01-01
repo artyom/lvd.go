@@ -17,11 +17,31 @@
 package cdf
 
 import (
-	"encoding/binary"
+	"io"
 	"os"
 )
 
+const _STREAMING = int32(-1) // value of numrecs meaning 'indeterminate'
+
 const _NumRecsOffset = 4 // position of the bigendian int32 in the header
+
+func readNumRecs(r io.ReaderAt) (int64, error) {
+	var buf [4]byte
+	_, err := r.ReadAt(buf[:], _NumRecsOffset)
+	if err != nil {
+		return 0, err
+	}
+	return int64(buf[0])<<24 + int64(buf[1])<<16 + int64(buf[2])<<8 + int64(buf[3]), nil
+}
+
+func writeNumRecs(w io.WriterAt, numrecs int64) error {
+	if numrecs >= (1<<31) || numrecs < 0 {
+		numrecs = -1
+	}
+	buf := [4]byte{byte(numrecs >> 24), byte(numrecs >> 16), byte(numrecs >> 8), byte(numrecs)}
+	_, err := w.WriteAt(buf[:], _NumRecsOffset)
+	return err
+}
 
 // UpdateNumRecs determines the number of record from the file size and
 // writes it into the file's header as the 'numrecs' field.
@@ -50,50 +70,18 @@ func UpdateNumRecs(f *os.File) error {
 		return err
 	}
 
-	if errs := h.Check(); errs != nil {
-		return errs[0] // only room for the first
-	}
-
-	h.setNumRecs(fi.Size())
-
-	if _, err = f.Seek(_NumRecsOffset, 0); err != nil {
-		return err
-	}
-
-	if err = binary.Write(f, binary.BigEndian, h.numrecs); err != nil {
-		return err
-	}
-
+	// seek to EOF to avoid hard to find clobbering errors
 	if _, err = f.Seek(0, 2); err != nil {
 		return err
 	}
 
+	if errs := h.Check(); errs != nil {
+		return errs[0] // only room for the first
+	}
+
+	if err = writeNumRecs(f, h.NumRecs(fi.Size())); err != nil {
+		return err
+	}
+
 	return nil
-}
-
-// setNumRecs computes the number or records from the filesize and sets the 
-// header field accordingly.  Returns the real number of records.
-// For fsize < 0, sets numrecs to -1 and returns -1.
-func (h *Header) setNumRecs(fsize int64) int64 {
-	if fsize < 0 {
-		h.numrecs = -1
-		return -1
-	}
-
-	offs, size := h.slabs()
-
-	if size == 0 || fsize < offs {
-		h.numrecs = 0
-		return 0
-	}
-
-	nr := (fsize - offs) / size
-
-	if nr < (1 << 31) {
-		h.numrecs = int32(nr)
-	} else {
-		h.numrecs = -1
-	}
-
-	return nr
 }

@@ -155,8 +155,8 @@ func (h *Header) WriteHeader(w io.Writer) error {
 		return err
 	}
 
-	// TBD: always /write/ -1 "STREAMING", and user must call UpdateNumRecs?
-	if err := binary.Write(w, binary.BigEndian, h.numrecs); err != nil {
+	var numrecs int32 = _STREAMING // ignored on reading
+	if err := binary.Write(w, binary.BigEndian, numrecs); err != nil {
 		return err
 	}
 

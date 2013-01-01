@@ -132,7 +132,7 @@ func TestReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nr := h.setNumRecs(fi.Size())
+	nr := h.NumRecs(fi.Size())
 	if nr != 5 {
 		t.Error("filesize: ", fi.Size(), " numrecs: ", nr, " != 5")
 	}

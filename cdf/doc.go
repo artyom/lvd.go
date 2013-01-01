@@ -15,7 +15,7 @@
 // Package CDF provides facilities to read and write files in NetCDF 'classic' (V1 or V2) format.
 // The HDF based NetCDF-4 format is not supported.
 //
-// The data model and the classic file format are documented at 
+// The data model and the classic file format are documented at
 //	http://www.unidata.ucar.edu/software/netcdf/docs/tutorial.html
 // 	http://www.unidata.ucar.edu/software/netcdf/docs/classic_format_spec.html
 //

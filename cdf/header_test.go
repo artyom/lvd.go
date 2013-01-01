@@ -49,9 +49,7 @@ func testAllFiles(t *testing.T, tf func(string, *testing.T)) {
 	}
 }
 
-func TestBinaryCompatibility(t *testing.T) {
-	testAllFiles(t, readWriteCompareHeader)
-}
+func TestBinaryCompatibility(t *testing.T) { testAllFiles(t, readWriteCompareHeader) }
 
 func readWriteCompareHeader(srcpath string, t *testing.T) {
 	srcf, err := os.Open(srcpath)
@@ -88,17 +86,12 @@ func readWriteCompareHeader(srcpath string, t *testing.T) {
 	// cheat; normally this is done by Define, but we need bit for bit equality
 	dst.fixRecordStrides()
 	dst.version = src.version
-	dst.setOffsets(src.dataStart())
+	dst.setOffsets(src.dataStart()) // dst.Define would use dst.dataStart
 
-	fi, err := srcf.Stat()
-	if err != nil {
-		t.Error(err)
+	if errs := dst.Check(); errs != nil {
+		fmt.Println(dst)
+		t.Errorf("%v", errs)
 		return
-	}
-	dst.setNumRecs(fi.Size())
-	if dst.numrecs != src.numrecs {
-		t.Errorf("computed numrecs %d != original numrecs %d", dst.numrecs, src.numrecs)
-		dst.numrecs = src.numrecs
 	}
 
 	dstf, err := ioutil.TempFile("", "")
@@ -107,7 +100,7 @@ func readWriteCompareHeader(srcpath string, t *testing.T) {
 		return
 	}
 
-	//	log.Println("tmp file: ", dstf.Name())
+	//log.Println("tmp file: ", dstf.Name())
 	defer os.Remove(dstf.Name())
 
 	if err := dst.WriteHeader(dstf); err != nil {
@@ -115,10 +108,12 @@ func readWriteCompareHeader(srcpath string, t *testing.T) {
 		return
 	}
 
-	if errs := dst.Check(); errs != nil {
-		fmt.Println(dst)
-		t.Errorf("%v", errs)
-		return
+	nr, err := readNumRecs(srcf)
+	if err != nil {
+		t.Error(err)
+	}
+	if err := writeNumRecs(dstf, nr); err != nil {
+		t.Error(err)
 	}
 
 	// compare

@@ -207,7 +207,8 @@ func ReadHeader(r io.Reader) (*Header, error) {
 
 	h := &Header{version: version}
 
-	if err := binary.Read(r, binary.BigEndian, &h.numrecs); err != nil {
+	var numrecs int32 // ignored
+	if err := binary.Read(r, binary.BigEndian, &numrecs); err != nil {
 		return nil, err
 	}
 
