@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// read sample NetCDF file from a directory default ./testdata/, or environment variable
-// NETCDF_TESTDIR if set, read, copy over through the API and verify that the written file
-// is byte by byte identical.
-
 package cdf
 
 import (

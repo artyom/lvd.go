@@ -32,9 +32,6 @@ var (
 	badAttributeType = errors.New("Invalid attribute storage type")
 )
 
-// set this to true in tests to read all strings including the trailing zeros
-var binaryCompatibleStringReading = false
-
 // read an (int32, []byte) encoded string
 func readString(r io.Reader) (s string, err error) {
 	var nelems int32
@@ -51,12 +48,6 @@ func readString(r io.Reader) (s string, err error) {
 	}
 	if err != nil {
 		return "", err
-	}
-
-	if !binaryCompatibleStringReading {
-		for nelems > 0 && buf[nelems-1] == 0 {
-			nelems--
-		}
 	}
 
 	return string(buf[:nelems]), nil

@@ -50,7 +50,6 @@ func testAllFiles(t *testing.T, tf func(string, *testing.T)) {
 }
 
 func TestBinaryCompatibility(t *testing.T) {
-	binaryCompatibleStringReading = true
 	testAllFiles(t, readWriteCompareHeader)
 }
 

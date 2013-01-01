@@ -806,7 +806,7 @@ func (h *Header) setOffsets(start int64) (first, last int64) {
 func (h *Header) isMutable() bool { return h.version == 0 }
 
 // Define makes a mutable header immutable by calculating the variable offsets and setting
-// the version number to V1 or V2, depending on whether the offsets require 64-bit offsets or not.
+// the version number to V1 or V2, depending on whether the layout requires 64-bit offsets or not.
 func (h *Header) Define() {
 	if !h.isMutable() {
 		panic("cannot Define an immutable header")

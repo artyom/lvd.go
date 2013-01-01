@@ -22,13 +22,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
+	//"log"
 	"os"
 	"testing"
 )
 
 func TestData(t *testing.T) {
-	binaryCompatibleStringReading = true
 	testAllFiles(t, readWriteCompareData)
 }
 
@@ -56,8 +55,8 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 		t.Error(err)
 		return
 	}
-	log.Println("tmp file: ", dstf.Name())
-	//defer os.Remove(dstf.Name())
+	//log.Println("tmp file: ", dstf.Name())
+	defer os.Remove(dstf.Name())
 
 	dst, err := Create(dstf, src.Header)
 	if err != nil {
@@ -67,7 +66,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 
 	//log.Print(src.Header)
 
-	log.Print("filling ", src.Header.numrecs, " records")
+	//log.Print("filling ", src.Header.numrecs, " records")
 	for i := 0; i < int(src.Header.numrecs); i++ {
 		if err := dst.FillRecord(i); err != nil {
 			t.Error(err)
@@ -78,7 +77,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 	for i, v := range dst.Header.Variables() {
 
 		if !dst.Header.IsRecordVariable(v) {
-			log.Print("filling ", v, "...")
+			//log.Print("filling ", v, "...")
 			// TODO: only for dtype is BYTE or SHORT, save time
 			if err := dst.Fill(v); err != nil {
 				t.Error(err)
@@ -86,7 +85,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 			}
 		}
 
-		log.Print("copying ", v, "...")
+		//log.Print("copying ", v, "...")
 
 		r := src.Reader(v, nil, nil)
 		w := dst.Writer(v, nil, nil)
@@ -133,7 +132,7 @@ func readWriteCompareData(srcpath string, t *testing.T) {
 			}
 		}
 		if rc != exp {
-			log.Print("copied ", rc, " values, expected ", exp)
+			t.Error("copied ", rc, " values, expected ", exp)
 		}
 	}
 
